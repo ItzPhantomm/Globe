@@ -3,6 +3,7 @@ Globe — Status & Presence Module
 Commands: stream, play, listen, watch, stopactivity, setstatus, defaultrpc
 Allows custom Rich Presence activity manipulation for selfbot accounts.
 Default Globe Rich Presence with profile image, Watching status, elapsed start timer, and interactive buttons.
+Synchronizes both Rich Presence Activity and Custom Status to ensure 100% visibility.
 """
 
 from __future__ import annotations
@@ -13,9 +14,6 @@ from discord.ext import commands
 
 from config import settings
 from ui import log_info, log_err
-
-GLOBE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1564278072574738513/1573984310942367806/ed7972243781a8a0a24bebad02f7b4dc.jpg"
-GLOBE_REPO_URL = "https://github.com/ItzPhantomm/Globe"
 
 # Permanent raw asset hosted on the official Globe repository
 GLOBE_REPO_URL = "https://github.com/ItzPhantomm/Globe"
@@ -33,47 +31,36 @@ class CustomRpcActivity(discord.BaseActivity):
         return self._data
 
 
-def get_default_globe_activity(user_id: int | None = None, start_time: float | None = None) -> discord.BaseActivity:
-    """Build the official default Globe Rich Presence activity."""
+def get_default_globe_activities(user_id: int | None = None, start_time: float | None = None) -> list[discord.BaseActivity]:
+    """Build the official default Globe Rich Presence activities list."""
     friend_link = f"https://discord.com/users/{user_id}" if user_id else "https://discord.com"
     start_ms = int((start_time if start_time else time.time()) * 1000)
 
-    # Standard discord.py-self Activity structure with metadata button_urls
-    try:
-        return discord.Activity(
-            type=discord.ActivityType.watching,
-            name="Globe",
-            application_id=1440261825852739706,
-            details="Your All in one Selfbot",
-            state="Active · Clean & Fast",
-            timestamps={"start": start_ms},
-            assets={
-                "large_image": GLOBE_RAW_IMAGE_URL,
-                "large_text": "Globe Selfbot",
-            },
-            buttons=["Use Globe!", "Add Friend"],
-            metadata={
-                "button_urls": [GLOBE_REPO_URL, friend_link],
-            },
-        )
-    except Exception:
-        payload = {
-            "name": "Globe",
-            "type": 3,
-            "application_id": 1440261825852739706,
-            "details": "Your All in one Selfbot",
-            "state": "Active · Clean & Fast",
-            "timestamps": {"start": start_ms},
-            "assets": {
-                "large_image": GLOBE_RAW_IMAGE_URL,
-                "large_text": "Globe Selfbot",
-            },
-            "buttons": ["Use Globe!", "Add Friend"],
-            "metadata": {
-                "button_urls": [GLOBE_REPO_URL, friend_link],
-            },
-        }
-        return CustomRpcActivity(payload)
+    # 1. Primary Rich Presence Activity (Watching Globe with elapsed timer and interactive buttons)
+    rpc_payload = {
+        "name": "Globe",
+        "type": 3,
+        "details": "Your All in one Selfbot",
+        "state": "Active · Clean & Fast",
+        "timestamps": {"start": start_ms},
+        "assets": {
+            "large_image": GLOBE_RAW_IMAGE_URL,
+            "large_text": "Globe Selfbot",
+        },
+        "buttons": ["Use Globe!", "Add Friend"],
+        "metadata": {
+            "button_urls": [GLOBE_REPO_URL, friend_link],
+        },
+    }
+    primary_act = CustomRpcActivity(rpc_payload)
+
+    # 2. Custom Status Activity (Guarantees public visibility to non-friends, mutual server members, and DMs)
+    custom_status = discord.CustomActivity(
+        name="Custom Status",
+        state="Watching Globe · globe.sh",
+    )
+
+    return [primary_act, custom_status]
 
 
 class Status(commands.Cog):
@@ -87,10 +74,11 @@ class Status(commands.Cog):
         """Apply official default Globe Rich Presence and verify."""
         try:
             user_id = self.bot.user.id if self.bot.user else None
-            # Retrieve bot start epoch for runtime counter
             start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
-            activity = get_default_globe_activity(user_id, start_epoch)
-            await self.bot.change_presence(activity=activity)
+            activities = get_default_globe_activities(user_id, start_epoch)
+            
+            # Send dual presence: rich activity + custom status
+            await self.bot.change_presence(activities=activities)
             self._init_done = True
             log_info("Rpc Initialized successful")
             return True
@@ -110,8 +98,8 @@ class Status(commands.Cog):
         await ctx.message.delete()
         user_id = self.bot.user.id if self.bot.user else ctx.author.id
         start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
-        activity = get_default_globe_activity(user_id, start_epoch)
-        await self.bot.change_presence(activity=activity)
+        activities = get_default_globe_activities(user_id, start_epoch)
+        await self.bot.change_presence(activities=activities)
         msg = await ctx.send("🌐 Presence reset to official **Globe Rich Presence**.")
         await msg.delete(delay=4)
 
