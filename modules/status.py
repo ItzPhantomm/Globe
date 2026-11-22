@@ -17,8 +17,9 @@ from ui import log_info, log_err
 GLOBE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1564278072574738513/1573984310942367806/ed7972243781a8a0a24bebad02f7b4dc.jpg"
 GLOBE_REPO_URL = "https://github.com/ItzPhantomm/Globe"
 
-# Media Proxy format for Discord Gateway asset resolution
-GLOBE_MP_ASSET = "mp:attachments/1564278072574738513/1573984310942367806/ed7972243781a8a0a24bebad02f7b4dc.jpg"
+# Permanent raw asset hosted on the official Globe repository
+GLOBE_REPO_URL = "https://github.com/ItzPhantomm/Globe"
+GLOBE_RAW_IMAGE_URL = "https://raw.githubusercontent.com/ItzPhantomm/Globe/main/assets/globe.jpg"
 
 
 class CustomRpcActivity(discord.BaseActivity):
@@ -37,44 +38,42 @@ def get_default_globe_activity(user_id: int | None = None, start_time: float | N
     friend_link = f"https://discord.com/users/{user_id}" if user_id else "https://discord.com"
     start_ms = int((start_time if start_time else time.time()) * 1000)
 
-    # If discord.ActivityButton exists in current build, use it, else use raw gateway payload
-    if hasattr(discord, "ActivityButton"):
-        try:
-            btn_use = discord.ActivityButton(label="Use Globe!", url=GLOBE_REPO_URL)
-            btn_friend = discord.ActivityButton(label="Add Friend", url=friend_link)
-            return discord.Activity(
-                type=discord.ActivityType.watching,
-                name="Globe",
-                application_id=1440261825852739706,
-                details="Your All in one Selfbot",
-                state="Active · Clean & Fast",
-                timestamps={"start": start_ms},
-                assets={
-                    "large_image": GLOBE_MP_ASSET,
-                    "large_text": "Globe Selfbot",
-                },
-                buttons=[btn_use, btn_friend],
-            )
-        except Exception:
-            pass
-
-    payload = {
-        "name": "Globe",
-        "type": 3,
-        "application_id": 1440261825852739706,
-        "details": "Your All in one Selfbot",
-        "state": "Active · Clean & Fast",
-        "timestamps": {"start": start_ms},
-        "assets": {
-            "large_image": GLOBE_MP_ASSET,
-            "large_text": "Globe Selfbot",
-        },
-        "buttons": ["Use Globe!", "Add Friend"],
-        "metadata": {
-            "button_urls": [GLOBE_REPO_URL, friend_link],
-        },
-    }
-    return CustomRpcActivity(payload)
+    # Standard discord.py-self Activity structure with metadata button_urls
+    try:
+        return discord.Activity(
+            type=discord.ActivityType.watching,
+            name="Globe",
+            application_id=1440261825852739706,
+            details="Your All in one Selfbot",
+            state="Active · Clean & Fast",
+            timestamps={"start": start_ms},
+            assets={
+                "large_image": GLOBE_RAW_IMAGE_URL,
+                "large_text": "Globe Selfbot",
+            },
+            buttons=["Use Globe!", "Add Friend"],
+            metadata={
+                "button_urls": [GLOBE_REPO_URL, friend_link],
+            },
+        )
+    except Exception:
+        payload = {
+            "name": "Globe",
+            "type": 3,
+            "application_id": 1440261825852739706,
+            "details": "Your All in one Selfbot",
+            "state": "Active · Clean & Fast",
+            "timestamps": {"start": start_ms},
+            "assets": {
+                "large_image": GLOBE_RAW_IMAGE_URL,
+                "large_text": "Globe Selfbot",
+            },
+            "buttons": ["Use Globe!", "Add Friend"],
+            "metadata": {
+                "button_urls": [GLOBE_REPO_URL, friend_link],
+            },
+        }
+        return CustomRpcActivity(payload)
 
 
 class Status(commands.Cog):
