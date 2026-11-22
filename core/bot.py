@@ -67,6 +67,7 @@ class GlobeBot(commands.Bot):
     async def on_ready(self) -> None:
         import time
         self._start_time = time.monotonic()
+        self._start_epoch = time.time()
 
         from ui import print_startup_table, banner
         from auth_handlers import auth
@@ -85,6 +86,11 @@ class GlobeBot(commands.Bot):
         )
         log_event("ready", f"logged in as {self.user} ({self.user.id if self.user else '?'})")
         log_info(f"Loaded modules: {', '.join(self._loaded_modules) or 'none'}")
+
+        # Explicitly initialize and verify Default Globe Rich Presence
+        if status_cog := self.get_cog("Status"):
+            if hasattr(status_cog, "apply_default_rpc"):
+                await status_cog.apply_default_rpc()
 
     # ── Command logging via listener (discord.py-self has no on_command event) ──
 

@@ -2,34 +2,43 @@
 Globe — Status & Presence Module
 Commands: stream, play, listen, watch, stopactivity, setstatus, defaultrpc
 Allows custom Rich Presence activity manipulation for selfbot accounts.
-Default Globe Rich Presence with profile image, Watching status, and interactive buttons.
+Default Globe Rich Presence with profile image, Watching status, elapsed start timer, and interactive buttons.
 """
 
 from __future__ import annotations
 
+import time
 import discord
 from discord.ext import commands
 
 from config import settings
-from ui import log_info
+from ui import log_info, log_err
 
 GLOBE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1564278072574738513/1573984310942367806/ed7972243781a8a0a24bebad02f7b4dc.jpg"
 GLOBE_REPO_URL = "https://github.com/ItzPhantomm/Globe"
 
+# Media Proxy format for Discord Gateway asset resolution
+GLOBE_MP_ASSET = "mp:attachments/1564278072574738513/1573984310942367806/ed7972243781a8a0a24bebad02f7b4dc.jpg"
 
-def get_default_globe_activity(user_id: int | None = None) -> discord.Activity:
+
+def get_default_globe_activity(user_id: int | None = None, start_time: float | None = None) -> discord.Activity:
     """Build the official default Globe Rich Presence activity."""
     friend_link = f"https://discord.com/users/{user_id}" if user_id else "https://discord.com"
     btn_use = discord.ActivityButton(label="Use Globe!", url=GLOBE_REPO_URL)
     btn_friend = discord.ActivityButton(label="Add Friend", url=friend_link)
     
+    # Calculate start timestamp in milliseconds for live elapsed timer
+    start_ms = int((start_time if start_time else time.time()) * 1000)
+    
     return discord.Activity(
         type=discord.ActivityType.watching,
         name="Globe",
+        application_id=1440261825852739706,
         details="Your All in one Selfbot",
         state="Active · Clean & Fast",
+        timestamps={"start": start_ms},
         assets={
-            "large_image": GLOBE_IMAGE_URL,
+            "large_image": GLOBE_MP_ASSET,
             "large_text": "Globe Selfbot",
         },
         buttons=[btn_use, btn_friend],
@@ -41,24 +50,36 @@ class Status(commands.Cog):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        self._init_done: bool = False
+
+    async def apply_default_rpc(self) -> bool:
+        """Apply official default Globe Rich Presence and verify."""
+        try:
+            user_id = self.bot.user.id if self.bot.user else None
+            # Retrieve bot start epoch for runtime counter
+            start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
+            activity = get_default_globe_activity(user_id, start_epoch)
+            await self.bot.change_presence(activity=activity)
+            self._init_done = True
+            log_info("Rpc Initialized successful")
+            return True
+        except Exception as e:
+            log_err(f"Rpc initialization failed: {e}")
+            return False
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
-        """Apply default Globe Rich Presence on ready if no custom activity is active."""
-        try:
-            user_id = self.bot.user.id if self.bot.user else None
-            activity = get_default_globe_activity(user_id)
-            await self.bot.change_presence(activity=activity)
-            log_info("Default Globe Rich Presence set.")
-        except Exception:
-            pass
+        """Apply default Globe Rich Presence on ready and verify."""
+        if not self._init_done:
+            await self.apply_default_rpc()
 
     @commands.command(name="defaultrpc", aliases=["globerpc", "resetrpc"])
     async def defaultrpc(self, ctx: commands.Context) -> None:
         """Reset presence back to default Globe Rich Presence."""
         await ctx.message.delete()
         user_id = self.bot.user.id if self.bot.user else ctx.author.id
-        activity = get_default_globe_activity(user_id)
+        start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
+        activity = get_default_globe_activity(user_id, start_epoch)
         await self.bot.change_presence(activity=activity)
         msg = await ctx.send("🌐 Presence reset to official **Globe Rich Presence**.")
         await msg.delete(delay=4)
