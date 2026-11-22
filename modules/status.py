@@ -50,7 +50,7 @@ def get_default_globe_activities(user_id: int | None = None, start_time: float |
             "large_image": GLOBE_ASSET_ID,
             "large_text": "Globe Selfbot",
         },
-        "buttons": ["Use Globe!", "Add Friend"],
+        "buttons": ["Try Globe!", "Add Friend"],
         "metadata": {
             "button_urls": [GLOBE_REPO_URL, friend_link],
         },
