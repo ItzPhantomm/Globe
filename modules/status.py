@@ -17,7 +17,7 @@ from ui import log_info, log_err
 
 # Official Discord Application configuration for Globe
 GLOBE_APP_ID = 1573995704144363560
-GLOBE_ASSET_KEY = "globe"
+GLOBE_ASSET_ID = "1573999624371441735"
 GLOBE_REPO_URL = "https://github.com/ItzPhantomm/Globe"
 
 
@@ -38,7 +38,7 @@ def get_default_globe_activities(user_id: int | None = None, start_time: float |
     start_ms = int((start_time if start_time else time.time()) * 1000)
 
     # 1. Primary Rich Presence Activity (Watching Globe with elapsed timer and interactive buttons)
-    # Uses official Discord Application ID & verified Rich Presence Art Asset key 'globe'
+    # Uses official Discord Application ID & verified Rich Presence Art Asset Snowflake ID
     rpc_payload = {
         "name": "Globe",
         "type": 3,
@@ -47,7 +47,7 @@ def get_default_globe_activities(user_id: int | None = None, start_time: float |
         "state": "Active · Clean & Fast",
         "timestamps": {"start": start_ms},
         "assets": {
-            "large_image": GLOBE_ASSET_KEY,
+            "large_image": GLOBE_ASSET_ID,
             "large_text": "Globe Selfbot",
         },
         "buttons": ["Use Globe!", "Add Friend"],
