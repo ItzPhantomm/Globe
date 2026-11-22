@@ -16,8 +16,8 @@ from config import settings
 from ui import log_info, log_err
 
 # Official Discord Application configuration for Globe
-GLOBE_APP_ID = 1573995704144363560
-GLOBE_ASSET_ID = "1573999624371441735"
+GLOBE_APP_ID = 1574047159374844055
+GLOBE_ASSET_ID = "1574047737283092570"
 GLOBE_REPO_URL = "https://github.com/ItzPhantomm/Globe"
 
 
@@ -43,8 +43,8 @@ def get_default_globe_activities(user_id: int | None = None, start_time: float |
         "name": "Globe",
         "type": 3,
         "application_id": GLOBE_APP_ID,
-        "details": "Your All in one Selfbot",
-        "state": "Active · Clean & Fast",
+        "details": "Globe",
+        "state": "Active. Made by ylemn",
         "timestamps": {"start": start_ms},
         "assets": {
             "large_image": GLOBE_ASSET_ID,
@@ -60,7 +60,7 @@ def get_default_globe_activities(user_id: int | None = None, start_time: float |
     # 2. Custom Status Activity (Guarantees public visibility to non-friends, mutual server members, and DMs)
     custom_status = discord.CustomActivity(
         name="Custom Status",
-        state="Watching Globe · globe.sh",
+        state="Watching Globe · Made by ylemn",
     )
 
     return [primary_act, custom_status]
