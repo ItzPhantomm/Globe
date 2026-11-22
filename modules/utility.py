@@ -172,19 +172,23 @@ class Utility(commands.Cog):
         if not module:
             # Main modules overview in exact requested order
             lines = [
-                f"> `-` **Welcome to Globe! Here is the modular system overview across Globe Selfbot.**\n",
+                f"> `-` **Welcome to Globe! The most complete, lightweight, and modern all-in-one Discord selfbot.**",
+                f"> Built with precision on `discord.py-self`, Globe gives you effortless control over your account with an ultra-clean block-quote UI, intelligent anti-detection footprint safeguards, and modular architecture.\n",
+                f"**__Don't know how to extract your token? Don't worry, Globe makes this easier than ever!__**",
+                f"> `—` **Zero PC Required · Mobile & Terminal First**",
+                f"> Extracting your Discord token usually requires inspecting network requests or running scripts on a desktop browser. Globe ships with an automated, native token extraction engine (`ext_token.py` / `{p}gettoken`) that works directly from your phone (Termux) or server terminal with full 2FA and backup code support.\n",
                 f"**Modules Overview (`{len(ORDERED_MODULES)}` Active Modules)**\n",
             ]
             for name, desc in ORDERED_MODULES:
                 if name in self.bot.cogs:
-                    lines.append(f"> `—` **__{name}__** (`{p}h {name.lower()}`)")
+                    lines.append(f"> `—` **`{name.lower()}`**")
                     lines.append(f"> {desc}\n")
 
             lines.extend([
                 f"**__Want To Inspect A Specific Module?__**",
                 f"Run **`{p}help <module> [page]`** (e.g., `{p}h moderation` or `{p}h utility 2`) to view the command checklist.\n",
                 f"> `•` **__Make Sure To Give It A Try!__**",
-                f"> `°` **__Globe__ — Minimal, Modular & Polished Selfbot Architecture.**",
+                f"> `°` **__Globe__ — Shaping Modern Selfbot Architecture. Minimal, Clean & Fast.**",
             ])
             await ctx.send("\n".join(lines))
             return
