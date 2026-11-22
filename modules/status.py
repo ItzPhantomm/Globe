@@ -106,6 +106,64 @@ class Status(commands.Cog):
         msg = await ctx.send("🌐 Presence reset to official **Globe Rich Presence**.")
         await msg.delete(delay=4)
 
+    @commands.command(name="rpctimer", aliases=["settimer", "rpctime"])
+    async def rpctimer(self, ctx: commands.Context, target_time: str) -> None:
+        """
+        Manually adjust the elapsed start timer of the Globe Rich Presence.
+        Supports formatted timestamps (e.g. `00:16:01`, `10:30`) or durations (`2h`, `45m`).
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        def _parse_time_offset(val: str) -> float | None:
+            val = val.strip().lower()
+            if ":" in val:
+                parts = val.split(":")
+                if len(parts) == 3:
+                    try:
+                        h, m, s = map(float, parts)
+                        return h * 3600 + m * 60 + s
+                    except ValueError:
+                        return None
+                elif len(parts) == 2:
+                    try:
+                        m, s = map(float, parts)
+                        return m * 60 + s
+                    except ValueError:
+                        return None
+            from modules.tools import _parse_duration
+            return _parse_duration(val)
+
+        offset_seconds = _parse_time_offset(target_time)
+        if offset_seconds is None or offset_seconds < 0:
+            await ctx.send(
+                "> `!` **Invalid Timer Format:** Use `HH:MM:SS` (e.g. `00:16:01`), `MM:SS` (`10:30`), or duration (`2h`, `45m`).",
+                delete_after=6,
+            )
+            return
+
+        # Calculate retroactive start epoch so Discord displays exact requested elapsed time
+        custom_start_epoch = time.time() - offset_seconds
+        self.bot._start_epoch = custom_start_epoch
+
+        user_id = self.bot.user.id if self.bot.user else ctx.author.id
+        activities = get_default_globe_activities(user_id, custom_start_epoch)
+        await self.bot.change_presence(activities=activities)
+
+        h, rem = divmod(int(offset_seconds), 3600)
+        m, s = divmod(rem, 60)
+        formatted_display = f"{h:02d}:{m:02d}:{s:02d}"
+
+        lines = [
+            f"> `-` **Globe Rich Presence Timer Synchronized**",
+            f"> `—` **Elapsed Time Set:** `{formatted_display}` elapsed",
+            f"> `—` **Timestamp Base:** <t:{int(custom_start_epoch)}:R>",
+            f"> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]
+        msg = await ctx.send("\n".join(lines))
+        await msg.delete(delay=6)
+
     @commands.command(name="stream", aliases=["streaming"])
     async def stream(self, ctx: commands.Context, stream_url: str, *, title: str) -> None:
         """Set your presence to Streaming (e.g. `g.stream https://twitch.tv/ninja Grinding Globe`)."""
