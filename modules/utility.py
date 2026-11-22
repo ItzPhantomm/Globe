@@ -362,6 +362,63 @@ class Utility(commands.Cog):
         lines.append(f"\n*Switch active token anytime with `{settings.prefix}settoken <token>`*")
         await ctx.send("\n".join(lines), delete_after=20)
 
+    @commands.command(name="mytoken", aliases=["showtoken", "curtoken"])
+    async def mytoken(self, ctx: commands.Context) -> None:
+        """
+        Inspect the active session token with interactive confirmation.
+        Prompts 'Are you sure?' before rendering the token in copy-paste format.
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        from auth_handlers import auth
+        active_tok = auth.token or getattr(self.bot.http, "token", "") or settings.discord_token
+        if not active_tok:
+            await ctx.send("❌ No active token found in memory or environment.", delete_after=5)
+            return
+
+        prompt_msg = await ctx.send(
+            "> `-` **Active Account Security Prompt**\n"
+            "> `—` **Warning:** Revealing your active account token gives full access to your account.\n"
+            "> `—` **Are you sure you want to display your current token?**\n"
+            "> `•` *Type `yes` or `y` in this channel within 15 seconds to confirm.*"
+        )
+
+        def check(m: discord.Message) -> bool:
+            return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id
+
+        try:
+            confirm_msg = await self.bot.wait_for("message", check=check, timeout=15.0)
+            user_reply = confirm_msg.content.strip().lower()
+            try:
+                await confirm_msg.delete()
+            except Exception:
+                pass
+
+            if user_reply in ("yes", "y"):
+                user_id = self.bot.user.id if self.bot.user else auth.extract_user_id(active_tok)
+                user_name = str(self.bot.user) if self.bot.user else "Selfbot Account"
+                masked = active_tok[:6] + "●" * 16 + active_tok[-4:]
+
+                lines = [
+                    f"> `-` **Current Account Token**",
+                    f"> `—` **Account:** **{user_name}** (`{user_id}`)",
+                    f"> `—` **Preview:** `{masked}`",
+                    f"> `—` **Copy-Paste Block:**",
+                    f"```{active_tok}```",
+                    f"> `•` *Auto-deleting in 30 seconds for your safety.*",
+                    f"> `°` **__Globe__ — Minimal, Clean & Secure Architecture.**",
+                ]
+                await prompt_msg.edit(content="\n".join(lines))
+                await prompt_msg.delete(delay=30)
+            else:
+                await prompt_msg.edit(content="> `—` **Action cancelled.** Token was not displayed.")
+                await prompt_msg.delete(delay=5)
+        except asyncio.TimeoutError:
+            await prompt_msg.edit(content="> `—` **Confirmation timed out.** Token was not displayed.")
+            await prompt_msg.delete(delay=5)
+
     @commands.command(name="gettoken", aliases=["extracttoken", "mobiletoken", "fetchtoken"])
     async def gettoken(self, ctx: commands.Context, email: str, *, password: str) -> None:
         """
