@@ -15,9 +15,10 @@ from discord.ext import commands
 from config import settings
 from ui import log_info, log_err
 
-# Permanent raw asset hosted on the official Globe repository
+# Official Discord Application configuration for Globe
+GLOBE_APP_ID = 1573995704144363560
+GLOBE_ICON_HASH = "7757fa79c19bd80038cad074937f3f99"
 GLOBE_REPO_URL = "https://github.com/ItzPhantomm/Globe"
-GLOBE_RAW_IMAGE_URL = "https://raw.githubusercontent.com/ItzPhantomm/Globe/main/assets/globe.jpg"
 
 
 class CustomRpcActivity(discord.BaseActivity):
@@ -37,14 +38,16 @@ def get_default_globe_activities(user_id: int | None = None, start_time: float |
     start_ms = int((start_time if start_time else time.time()) * 1000)
 
     # 1. Primary Rich Presence Activity (Watching Globe with elapsed timer and interactive buttons)
+    # Uses official Discord Application ID & verified icon asset hash to ensure Discord renders the image globally
     rpc_payload = {
         "name": "Globe",
         "type": 3,
+        "application_id": GLOBE_APP_ID,
         "details": "Your All in one Selfbot",
         "state": "Active · Clean & Fast",
         "timestamps": {"start": start_ms},
         "assets": {
-            "large_image": GLOBE_RAW_IMAGE_URL,
+            "large_image": GLOBE_ICON_HASH,
             "large_text": "Globe Selfbot",
         },
         "buttons": ["Use Globe!", "Add Friend"],
