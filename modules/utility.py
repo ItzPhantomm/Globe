@@ -174,9 +174,6 @@ class Utility(commands.Cog):
             lines = [
                 f"> `-` **Welcome to Globe! The most complete, lightweight, and modern all-in-one Discord selfbot.**",
                 f"> Built with precision on `discord.py-self`, Globe gives you effortless control over your account with an ultra-clean block-quote UI, intelligent anti-detection footprint safeguards, and modular architecture.\n",
-                f"**__Don't know how to extract your token? Don't worry, Globe makes this easier than ever!__**",
-                f"> `—` **Zero PC Required · Mobile & Terminal First**",
-                f"> Extracting your Discord token usually requires inspecting network requests or running scripts on a desktop browser. Globe ships with an automated, native token extraction engine (`ext_token.py` / `{p}gettoken`) that works directly from your phone (Termux) or server terminal with full 2FA and backup code support.\n",
                 f"**Modules Overview (`{len(ORDERED_MODULES)}` Active Modules)**\n",
             ]
             for name, desc in ORDERED_MODULES:
