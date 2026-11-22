@@ -21,28 +21,60 @@ GLOBE_REPO_URL = "https://github.com/ItzPhantomm/Globe"
 GLOBE_MP_ASSET = "mp:attachments/1564278072574738513/1573984310942367806/ed7972243781a8a0a24bebad02f7b4dc.jpg"
 
 
-def get_default_globe_activity(user_id: int | None = None, start_time: float | None = None) -> discord.Activity:
+class CustomRpcActivity(discord.BaseActivity):
+    """Direct Discord Gateway compatible activity supporting custom buttons and rich assets."""
+
+    def __init__(self, data: dict) -> None:
+        self._data = data
+        self.type = discord.ActivityType(data.get("type", 3))
+
+    def to_dict(self) -> dict:
+        return self._data
+
+
+def get_default_globe_activity(user_id: int | None = None, start_time: float | None = None) -> discord.BaseActivity:
     """Build the official default Globe Rich Presence activity."""
     friend_link = f"https://discord.com/users/{user_id}" if user_id else "https://discord.com"
-    btn_use = discord.ActivityButton(label="Use Globe!", url=GLOBE_REPO_URL)
-    btn_friend = discord.ActivityButton(label="Add Friend", url=friend_link)
-    
-    # Calculate start timestamp in milliseconds for live elapsed timer
     start_ms = int((start_time if start_time else time.time()) * 1000)
-    
-    return discord.Activity(
-        type=discord.ActivityType.watching,
-        name="Globe",
-        application_id=1440261825852739706,
-        details="Your All in one Selfbot",
-        state="Active · Clean & Fast",
-        timestamps={"start": start_ms},
-        assets={
+
+    # If discord.ActivityButton exists in current build, use it, else use raw gateway payload
+    if hasattr(discord, "ActivityButton"):
+        try:
+            btn_use = discord.ActivityButton(label="Use Globe!", url=GLOBE_REPO_URL)
+            btn_friend = discord.ActivityButton(label="Add Friend", url=friend_link)
+            return discord.Activity(
+                type=discord.ActivityType.watching,
+                name="Globe",
+                application_id=1440261825852739706,
+                details="Your All in one Selfbot",
+                state="Active · Clean & Fast",
+                timestamps={"start": start_ms},
+                assets={
+                    "large_image": GLOBE_MP_ASSET,
+                    "large_text": "Globe Selfbot",
+                },
+                buttons=[btn_use, btn_friend],
+            )
+        except Exception:
+            pass
+
+    payload = {
+        "name": "Globe",
+        "type": 3,
+        "application_id": 1440261825852739706,
+        "details": "Your All in one Selfbot",
+        "state": "Active · Clean & Fast",
+        "timestamps": {"start": start_ms},
+        "assets": {
             "large_image": GLOBE_MP_ASSET,
             "large_text": "Globe Selfbot",
         },
-        buttons=[btn_use, btn_friend],
-    )
+        "buttons": ["Use Globe!", "Add Friend"],
+        "metadata": {
+            "button_urls": [GLOBE_REPO_URL, friend_link],
+        },
+    }
+    return CustomRpcActivity(payload)
 
 
 class Status(commands.Cog):
