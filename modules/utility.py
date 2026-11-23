@@ -136,6 +136,141 @@ class Utility(commands.Cog):
         msg = await ctx.send(f"{status} `{module}`")
         await msg.delete(delay=4)
 
+    @commands.command(name="restart", aliases=["reboot", "rb"])
+    async def restart(self, ctx: commands.Context) -> None:
+        """Restart the Globe selfbot process."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        lines = [
+            "> `-` **Globe Selfbot — Rebooting System**",
+            "> `—` **Trigger:** Process restart initiated by owner",
+            "> `—` **Runtime:** Relaunching Python interpreter instance",
+            "> `•` *Rebooting now…*",
+            "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]
+        msg = await ctx.send("\n".join(lines))
+        await asyncio.sleep(1.0)
+        try:
+            await self.bot.close()
+        except Exception:
+            pass
+        import os, sys
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    @commands.command(name="update", aliases=["upgrade", "gitpull", "hotreload", "pull"])
+    async def update(self, ctx: commands.Context) -> None:
+        """
+        Pull latest commits from GitHub and hot-restart all modules in memory without stopping or dropping Rich Presence.
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        status_msg = await ctx.send(
+            "> `—` **Connecting to GitHub repository & checking upstream commits…**"
+        )
+
+        import subprocess
+        from core.loader import ModuleLoader
+        from pathlib import Path
+
+        repo_root = Path(__file__).parent.parent
+        git_dir = repo_root / ".git"
+
+        if not git_dir.exists():
+            await status_msg.edit(content="> `!` **Git Error:** No local `.git` repository detected.")
+            await status_msg.delete(delay=6)
+            return
+
+        old_commit = "unknown"
+        try:
+            old_commit = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=str(repo_root),
+                text=True,
+                timeout=5,
+            ).strip()
+        except Exception:
+            pass
+
+        loop = asyncio.get_running_loop()
+        def _run_git_pull() -> tuple[int, str, str]:
+            res = subprocess.run(
+                ["git", "pull", "--ff-only", "origin", "main"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            return res.returncode, res.stdout.strip(), res.stderr.strip()
+
+        try:
+            code, stdout, stderr = await loop.run_in_executor(None, _run_git_pull)
+        except Exception as e:
+            await status_msg.edit(content=f"> `!` **Git Pull Failed:** `{e}`")
+            await status_msg.delete(delay=6)
+            return
+
+        if code != 0:
+            err_msg = stderr or stdout or "Conflict or network failure"
+            await status_msg.edit(content=f"> `!` **Git Pull Error:** `{err_msg[:200]}`")
+            await status_msg.delete(delay=8)
+            return
+
+        new_commit = old_commit
+        try:
+            new_commit = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=str(repo_root),
+                text=True,
+                timeout=5,
+            ).strip()
+        except Exception:
+            pass
+
+        # Hot-restart all modules in memory without stopping or dropping gateway connection
+        loader = ModuleLoader(self.bot)
+        all_mods = await loader.load_all()
+        target_mods = list(self.bot._loaded_modules or all_mods)
+        reloaded: list[str] = []
+        failed: list[str] = []
+        for m in target_mods:
+            ok = await loader.reload(m)
+            if ok:
+                reloaded.append(m)
+            else:
+                failed.append(m)
+
+        # Re-synchronize official Globe Rich Presence (RPC) & Status to ensure uninterrupted broadcast
+        rpc_synced = False
+        try:
+            if status_cog := self.bot.get_cog("Status"):
+                if hasattr(status_cog, "apply_default_rpc"):
+                    await status_cog.apply_default_rpc()
+                    rpc_synced = True
+        except Exception as e:
+            log_err(f"RPC re-sync error after hot update: {e}")
+
+        is_fresh = old_commit != new_commit
+        state_title = "Globe Selfbot — Updated & Hot-Restarted" if is_fresh else "Globe Selfbot — Up to Date & Refreshed"
+        summary_line = stdout.splitlines()[-1] if stdout else "Up to date"
+        rpc_note = "Active & Synchronized (0s downtime)" if rpc_synced else "Gateway presence active"
+
+        lines = [
+            f"> `-` **{state_title}**",
+            f"> `—` **Commit State:** `{old_commit}` → `{new_commit}` (`origin/main`)",
+            f"> `—` **Git Result:** `{summary_line}`",
+            f"> `—` **Hot Restart:** `{len(reloaded)}` modules reloaded in-memory",
+            f"> `—` **Process State:** Zero downtime · Connection & Gateway intact",
+            f"> `—` **Rich Presence (RPC):** {rpc_note}",
+            "> `•` *Live update completed without killing process or losing state.*",
+            "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]
+        await status_msg.edit(content="\n".join(lines))
+        await status_msg.delete(delay=12)
+
     @commands.command(name="modules", aliases=["mods"])
     async def modules(self, ctx: commands.Context) -> None:
         """List active modules in priority order."""
@@ -1367,7 +1502,7 @@ class Utility(commands.Cog):
 
     # ── Self-Purge Utility ───────────────────────────────────────────────────
 
-    @commands.command(name="selfpurge", aliases=["spurge", "purge", "sp", "clearself", "cs"])
+    @commands.command(name="selfpurge", aliases=["spurge", "purge", "sp", "clearself"])
     async def selfpurge(self, ctx: commands.Context, limit: int = 50) -> None:
         """
         Purge your own sent messages in the current channel or Direct Message (DM).

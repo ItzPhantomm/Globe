@@ -60,8 +60,39 @@ def main(token: str | None, prefix: str | None, debug: bool) -> None:
         log_err("Invalid token. Exiting.")
         sys.exit(1)
 
+    # Auto-update from GitHub repository on startup
+    auto_update_from_github()
+
     # Kick off the bot
     asyncio.run(_run(resolved_token))
+
+
+def auto_update_from_github() -> None:
+    """Pull latest updates from GitHub repository on bot launch."""
+    import subprocess
+    git_dir = ROOT / ".git"
+    if not git_dir.exists():
+        return
+    try:
+        log_info("Checking GitHub for updates...")
+        res = subprocess.run(
+            ["git", "pull", "--ff-only", "origin", "main"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            cwd=str(ROOT),
+        )
+        if res.returncode == 0:
+            msg = res.stdout.strip()
+            if "Already up to date" in msg:
+                log_info("Globe is up to date.")
+            else:
+                first_line = msg.splitlines()[0] if msg else "Updated."
+                log_info(f"Auto-updater: {first_line}")
+        else:
+            log_warn(f"Auto-update check bypassed: {res.stderr.strip()[:60]}")
+    except Exception as e:
+        log_warn(f"Auto-update check skipped: {e}")
 
 
 async def _run(token: str) -> None:
