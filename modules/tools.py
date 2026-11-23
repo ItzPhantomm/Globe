@@ -18,6 +18,7 @@ import socket
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 from urllib.parse import quote_plus
 
 import discord
@@ -67,6 +68,62 @@ class Tools(commands.Cog):
         self._sniped_codes: set[str] = set()
         self._auto_react: dict[int, list[str]] = {}
         self._auto_reply: dict[int, list[AutoReplyRule]] = {}
+        self._privacy_enabled: bool = False
+        self._privacy_until: float | None = None
+        self._pending_privacy_messages: dict[int, list[int]] = {}
+
+    # ── DM Privacy Mode (Auto-delete seen messages in DMs) ─────────────────────
+
+    @commands.command(name="privacy", aliases=["dmprivacy", "ephemeral", "autowipe"])
+    async def privacy(self, ctx: commands.Context, duration: str | None = None) -> None:
+        """
+        Toggle DM Privacy mode on/off (optional duration: g.privacy 10m or g.privacy 1h).
+        When enabled, your messages in Direct Messages (DMs) are automatically and immediately
+        deleted the moment the recipient views/reads/types/reacts or replies.
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        if self._privacy_enabled and not duration:
+            self._privacy_enabled = False
+            self._privacy_until = None
+            self._pending_privacy_messages.clear()
+            lines = [
+                "> `-` **DM Privacy Mode:** `DISABLED`",
+                "> `—` **Status:** Normal message retention restored in Direct Messages",
+                "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+            ]
+            msg = await ctx.send("\n".join(lines))
+            await msg.delete(delay=5)
+            log_info("DM Privacy mode disabled.")
+            return
+
+        self._privacy_enabled = True
+        duration_desc = "Indefinite (until toggled off)"
+
+        if duration:
+            secs = _parse_duration(duration)
+            if secs:
+                self._privacy_until = time.monotonic() + secs
+                duration_desc = f"`{duration}` (auto-disables after {duration})"
+            else:
+                self._privacy_until = None
+        else:
+            self._privacy_until = None
+
+        lines = [
+            "> `-` **DM Privacy Mode:** `ENABLED`",
+            f"> `—` **Duration:** {duration_desc}",
+            "> `—` **Trigger:** Immediate self-destruct upon recipient read/seen event",
+            "> `—` **Detection Vectors:** Typing indicator, read acknowledgment, reply, reaction",
+            "> `—` **Scope:** Direct Messages (DMs) only",
+            "> `•` *Your messages in DMs will self-destruct as soon as the recipient opens, reads, reacts, or replies.*",
+            "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]
+        msg = await ctx.send("\n".join(lines))
+        await msg.delete(delay=8)
+        log_info(f"DM Privacy mode enabled ({duration_desc}).")
 
     # ── Nitro Sniper ──────────────────────────────────────────────────────────
 
@@ -580,7 +637,22 @@ class Tools(commands.Cog):
 
         # 2. Channel Auto-react & Auto-reply
         if message.author.id == self.bot.user.id:
+            # 3. DM Privacy Mode: Check duration expiry & track outgoing DM messages
+            if self._privacy_enabled:
+                if self._privacy_until and time.monotonic() >= self._privacy_until:
+                    self._privacy_enabled = False
+                    self._privacy_until = None
+                    log_info("DM Privacy mode auto-disabled (duration expired).")
+
+                if message.guild is None or isinstance(message.channel, discord.DMChannel):
+                    if not message.content.startswith(P):
+                        self._pending_privacy_messages.setdefault(message.channel.id, []).append(message.id)
             return
+
+        # 3. DM Privacy Mode: Incoming DM message from other party -> wipe all seen messages
+        if self._privacy_enabled:
+            if message.guild is None or isinstance(message.channel, discord.DMChannel):
+                await self._wipe_dm_seen_messages(message.channel.id)
 
         emojis = self._auto_react.get(message.channel.id, [])
         for em in emojis:
@@ -614,6 +686,73 @@ class Tools(commands.Cog):
                 except Exception:
                     pass
                 break
+
+    async def _wipe_dm_seen_messages(self, channel_id: int) -> None:
+        """Immediately delete pending outgoing messages in a DM once seen."""
+        msg_ids = self._pending_privacy_messages.pop(channel_id, [])
+
+        channel = self.bot.get_channel(channel_id)
+        if not channel:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except Exception:
+                return
+
+        # Delete tracked messages
+        for mid in msg_ids:
+            try:
+                msg = getattr(self.bot, "_connection", None)
+                message = msg._get_message(mid) if msg else None
+                if message is None:
+                    message = await channel.fetch_message(mid)
+                if message and self.bot.user and message.author.id == self.bot.user.id:
+                    await message.delete()
+                    await asyncio.sleep(0.2)
+            except Exception:
+                pass
+
+        # Scan and purge any recent own messages in this DM to guarantee zero residual messages
+        try:
+            async for m in channel.history(limit=10):
+                if self.bot.user and m.author.id == self.bot.user.id:
+                    try:
+                        await m.delete()
+                        await asyncio.sleep(0.2)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_typing(self, channel: discord.abc.Messageable, user: discord.User | discord.Member, when: datetime) -> None:
+        """Wipe DM messages immediately when recipient starts typing (seen indicator)."""
+        if not self._privacy_enabled or not self.bot.user:
+            return
+        if getattr(channel, "guild", None) is not None:
+            return
+        if user.id == self.bot.user.id:
+            return
+        await self._wipe_dm_seen_messages(channel.id)
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        """Wipe DM messages immediately when recipient reacts to a message (seen indicator)."""
+        if not self._privacy_enabled or not self.bot.user:
+            return
+        if payload.guild_id is not None:
+            return
+        if payload.user_id == self.bot.user.id:
+            return
+        await self._wipe_dm_seen_messages(payload.channel_id)
+
+    @commands.Cog.listener()
+    async def on_raw_message_ack(self, raw: Any) -> None:
+        """Wipe DM messages immediately upon gateway read acknowledgment event."""
+        if not self._privacy_enabled or not self.bot.user:
+            return
+        channel_id = getattr(raw, "channel_id", None)
+        if channel_id and (channel_id in self._pending_privacy_messages or self.bot.get_channel(channel_id) is None):
+            await self._wipe_dm_seen_messages(channel_id)
 
 
 async def setup(bot: commands.Bot) -> None:

@@ -1365,6 +1365,69 @@ class Utility(commands.Cog):
         except Exception as e:
             await ctx.send(f"> `!` **Translation Error:** `{e}`", delete_after=5)
 
+    # ── Self-Purge Utility ───────────────────────────────────────────────────
+
+    @commands.command(name="selfpurge", aliases=["spurge", "purge", "sp", "clearself", "cs"])
+    async def selfpurge(self, ctx: commands.Context, limit: int = 50) -> None:
+        """
+        Purge your own sent messages in the current channel or Direct Message (DM).
+        Usage: g.selfpurge [amount] or g.spurge [amount] (default: 50, max: 500)
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        target_limit = max(1, min(limit, 500))
+        channel_name = f"#{ctx.channel.name}" if hasattr(ctx.channel, "name") and ctx.channel.name else "Direct Message"
+        status_msg = await ctx.send(
+            f"> `-` **Self-Purge Initialized**\n"
+            f"> `—` **Target Count:** `{target_limit}` messages\n"
+            f"> `—` **Target Author:** `{ctx.author.name}`\n"
+            f"> `—` **Channel:** `{channel_name}`\n"
+            f"> `•` *Scanning channel history and purging own messages…*"
+        )
+
+        deleted_count = 0
+        scanned_count = 0
+
+        try:
+            # Scan channel history (before the status message)
+            scan_cap = min(target_limit * 4, 1500)
+            async for msg in ctx.channel.history(limit=scan_cap, before=status_msg):
+                scanned_count += 1
+                if self.bot.user and msg.author.id == self.bot.user.id and msg.id != status_msg.id:
+                    try:
+                        await msg.delete()
+                        deleted_count += 1
+                        await asyncio.sleep(0.35)
+                    except discord.NotFound:
+                        pass
+                    except discord.Forbidden:
+                        break
+                    except discord.HTTPException as e:
+                        if getattr(e, "status", None) == 429:
+                            await asyncio.sleep(2.0)
+                        else:
+                            pass
+
+                if deleted_count >= target_limit:
+                    break
+
+            completion_lines = [
+                "> `-` **Self-Purge Completed**",
+                f"> `—` **Messages Deleted:** `{deleted_count}` own messages wiped",
+                f"> `—` **Channel:** `{channel_name}`",
+                f"> `—` **Scanned Depth:** `{scanned_count}` messages parsed",
+                "> `•` *Purge finished with zero residual author footprint.*",
+                "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+            ]
+            await status_msg.edit(content="\n".join(completion_lines))
+            await status_msg.delete(delay=6)
+
+        except Exception as e:
+            await status_msg.edit(content=f"> `!` **Self-Purge Error:** `{e}`")
+            await status_msg.delete(delay=5)
+
     # ── Listeners ─────────────────────────────────────────────────────────────
 
     @commands.Cog.listener()
