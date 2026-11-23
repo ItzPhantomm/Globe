@@ -12,6 +12,10 @@ data/
 *.sqlite3
 
 # Python bytecode & caches
+.venv/
+venv/
+ENV/
+env/
 __pycache__/
 *.py[cod]
 *$py.class
