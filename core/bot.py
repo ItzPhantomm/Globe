@@ -19,11 +19,20 @@ if TYPE_CHECKING:
     pass
 
 
+def _resolve_prefixes(bot: GlobeBot, message: discord.Message) -> list[str]:
+    """Support configured prefix and standard '.' shorthand dynamically."""
+    p = settings.prefix.strip() if settings.prefix else "g."
+    prefixes = [p]
+    if "." not in prefixes:
+        prefixes.append(".")
+    return prefixes
+
+
 class GlobeBot(commands.Bot):
     """
     Central bot class.
     - Self-account (user token) mode via discord.py-self
-    - Prefix: g.
+    - Prefix: g. (also accepts . shorthand)
     - Modular cog system
     - discord.py-self has NO intents — selfbots receive all events by default
     """
@@ -32,7 +41,7 @@ class GlobeBot(commands.Bot):
         # discord.py-self: NO Intents class — selfbots get all events automatically.
         # Valid kwargs flow through Bot → Client → ConnectionState.
         super().__init__(
-            command_prefix=settings.prefix,
+            command_prefix=_resolve_prefixes,
             self_bot=True,           # discord.py-self: respond only to own messages
             help_command=None,       # We provide our own g.help
             strip_after_prefix=True,
@@ -148,9 +157,9 @@ class GlobeBot(commands.Bot):
     # ── Message handler ────────────────────────────────────────────────────────
 
     async def on_message(self, message: discord.Message) -> None:
-        # Record message statistics in local sqlite tracker
-        from data.tracker import tracker
+        # Record message statistics in local sqlite tracker safely
         try:
+            from data.tracker import tracker
             tracker.record_message(
                 author_id=message.author.id,
                 guild_id=message.guild.id if message.guild else None,
@@ -172,11 +181,13 @@ class GlobeBot(commands.Bot):
                     pass
 
         # No-prefix handling for selfbot account
+        prefixes = _resolve_prefixes(self, message)
+        has_prefix = any(message.content.startswith(p) for p in prefixes)
         if (
             self._no_prefix_enabled
             and self.user
             and message.author.id == self.user.id
-            and not message.content.startswith(settings.prefix)
+            and not has_prefix
         ):
             import time
             if self._no_prefix_until and time.monotonic() > self._no_prefix_until:
