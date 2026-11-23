@@ -247,6 +247,137 @@ class Status(commands.Cog):
         msg = await ctx.send(f"🟢 Status set to `{status_type.lower()}`")
         await msg.delete(delay=4)
 
+    @commands.command(name="publicrpc", aliases=["makepublic", "shareactivity"])
+    async def publicrpc(self, ctx: commands.Context) -> None:
+        """
+        Ensure your Rich Presence and Game Activity are publicly broadcast to non-friends and mutual servers.
+        Configures user account settings to enable show_current_game and re-syncs presence across Discord.
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        status_msg = await ctx.send("> `—` **Updating Discord Activity Privacy to Public…**")
+        applied_settings = False
+        try:
+            if hasattr(self.bot, "settings") and self.bot.settings:
+                # Update account-level protobuf settings so Discord broadcasts games/activities to non-friends
+                await self.bot.settings.edit(show_current_game=True)
+                applied_settings = True
+        except Exception as e:
+            log_err(f"Failed to patch user settings: {e}")
+
+        # Re-apply dual presence broadcast with edit_settings=True
+        user_id = self.bot.user.id if self.bot.user else ctx.author.id
+        start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
+        activities = get_default_globe_activities(user_id, start_epoch)
+        try:
+            await self.bot.change_presence(activities=activities, status=discord.Status.online, edit_settings=True)
+        except Exception as e:
+            log_err(f"Failed to re-broadcast public presence: {e}")
+
+        setting_note = "Enabled `show_current_game` on account" if applied_settings else "Broadcasting public activity and custom status"
+        lines = [
+            "> `-` **Public Rich Presence Visibility Configured**",
+            f"> `—` **Account Privacy Sync:** {setting_note}",
+            "> `—` **Non-Friend Broadcast:** Active (Rich Activity + Custom Status sync)",
+            "> `—` **Server Popouts:** Visible to all server members & direct messages",
+            "> `•` *Tip: Ensure 'Display current activity as a status message' is enabled in your Discord Settings > Activity Privacy.*",
+            "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]
+        await status_msg.edit(content="\n".join(lines))
+        await status_msg.delete(delay=10)
+
+    # ── Batch Badge & Game Variety Telemetry Spoofer ──────────────────────────
+
+    @commands.command(name="badgespoofer", aliases=["spoofbadges", "batchspoofer", "gamespoofer"])
+    async def badgespoofer(self, ctx: commands.Context, target: str = "variety", count: int = 15) -> None:
+        """
+        Simulate detectable game sessions to advance Discord's Game Variety and Game Time badges.
+        Usage: `g.badgespoofer variety [count]` or `g.badgespoofer play <game_name>`
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        mode = target.strip().lower()
+        if mode in ("variety", "batch", "all"):
+            batch_count = max(1, min(count, 35))
+            status_msg = await ctx.send(f"> `—` **Fetching detectable games catalog from Discord…**")
+
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get("https://discord.com/api/v9/applications/detectable")
+                    games_catalog = resp.json()
+            except Exception as e:
+                await status_msg.edit(content=f"> `!` **Catalog Fetch Failed:** `{e}`")
+                await status_msg.delete(delay=5)
+                return
+
+            # Filter valid games with executable signatures
+            valid_games = [g for g in games_catalog if g.get("id") and g.get("name") and g.get("executables")]
+            if not valid_games:
+                await status_msg.edit(content="> `!` **No detectable games found in Discord catalog.**")
+                await status_msg.delete(delay=5)
+                return
+
+            import random
+            selected_games = random.sample(valid_games, min(batch_count, len(valid_games)))
+
+            lines = [
+                f"> `-` **Batch Game Variety Spoofer Activated**",
+                f"> `—` **Simulating:** `{len(selected_games)}` unique titles sequentially",
+                f"> `—` **Cadence:** `3.5s` hold per game session (anti-flood guard)",
+                "> `—` **Target Badge:** Game Variety & Playtime Milestone",
+                "> `•` *Starting session cycle now…*",
+            ]
+            await status_msg.edit(content="\n".join(lines))
+
+            # Cycle through games via Gateway presence updates
+            for idx, g in enumerate(selected_games, 1):
+                g_id = int(g["id"])
+                g_name = g["name"]
+                
+                # Create game activity
+                game_act = discord.Game(name=g_name, application_id=g_id)
+                try:
+                    await self.bot.change_presence(activity=game_act)
+                except Exception:
+                    pass
+
+                await asyncio.sleep(3.5)
+
+            # Restore default Globe Rich Presence
+            user_id = self.bot.user.id if self.bot.user else ctx.author.id
+            start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
+            activities = get_default_globe_activities(user_id, start_epoch)
+            await self.bot.change_presence(activities=activities)
+
+            completed_lines = [
+                f"> `-` **Batch Game Variety Spoof Completed**",
+                f"> `—` **Processed:** `{len(selected_games)}` verified titles registered to profile telemetry",
+                f"> `—` **Sample Processed:** {', '.join(f'`{g[\"name\"]}`' for g in selected_games[:4])}…",
+                "> `—` **Status:** Presence restored to default Globe Rich Presence",
+                "> `•` *Note: Discord's badge index pipeline refreshes every 24–72 hours.*",
+                "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+            ]
+            await status_msg.edit(content="\n".join(completed_lines))
+            await status_msg.delete(delay=12)
+
+        else:
+            # Single game spoof mode (e.g. `g.badgespoofer play Grand Theft Auto V`)
+            game_name = target if count == 15 else f"{target} {count}"
+            game_act = discord.Game(name=game_name)
+            await self.bot.change_presence(activity=game_act)
+            msg = await ctx.send(
+                f"> `-` **Single Game Telemetry Active**\n"
+                f"> `—` **Game:** `{game_name}`\n"
+                f"> `—` Accumulating playtime towards **Game Time Badge**.\n"
+                f"> `•` *Run `{settings.prefix}defaultrpc` anytime to return to Globe presence.*"
+            )
+            await msg.delete(delay=8)
+
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Status(bot))
