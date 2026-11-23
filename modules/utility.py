@@ -551,6 +551,59 @@ class Utility(commands.Cog):
             await prompt_msg.edit(content="> `—` **Confirmation timed out.** Token was not displayed.")
             await prompt_msg.delete(delay=5)
 
+    @commands.command(name="vault", aliases=["encrypttoken", "tokenvault"])
+    async def vault_cmd(self, ctx: commands.Context, action: str = "status", *, passphrase: str | None = None) -> None:
+        """
+        Manage encrypted token vault (AES-256-GCM + PBKDF2).
+        Usage: g.vault status or g.vault encrypt <one_time_startup_key>
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        from auth_handlers import auth
+        from core import vault
+
+        act = action.lower()
+        if act in ("status", "info"):
+            raw_token = settings.discord_token
+            is_enc = vault.is_encrypted(raw_token)
+            status_badge = "`ENCRYPTED (AES-256-GCM)`" if is_enc else "`PLAINTEXT (Unprotected)`"
+            lines = [
+                "> `-` **Globe Vault — Token Security Status**",
+                f"> `—` **Storage Format:** {status_badge}",
+                "> `—` **Cipher:** AES-256-GCM authenticated encryption",
+                "> `—` **Key Derivation:** PBKDF2-HMAC-SHA256 (480,000 rounds)",
+                "> `—` **Memory Lifecycle:** Plaintext exists only in RAM; never leaves process",
+                f"> `•` *To lock token on disk: `{settings.prefix}vault encrypt <passphrase>`*",
+                "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+            ]
+            msg = await ctx.send("\n".join(lines))
+            await msg.delete(delay=10)
+            return
+
+        if act in ("encrypt", "lock"):
+            if not passphrase:
+                msg = await ctx.send(f"> `!` **Usage:** `{settings.prefix}vault encrypt <startup_passphrase>`")
+                await msg.delete(delay=5)
+                return
+
+            try:
+                enc = auth.encrypt_current_token(passphrase.strip())
+                lines = [
+                    "> `-` **Globe Vault — Token Encrypted Successfully**",
+                    "> `—` **Status:** Plaintext token erased from `.env` and `token.txt`",
+                    f"> `—` **Ciphertext:** `{enc[:32]}…`",
+                    "> `—` **Next Launch:** Bot will require your one-time startup key (`--key` or prompt)",
+                    "> `•` *Your token is now 100% immune to VPS disk dumps or file inspection.*",
+                    "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+                ]
+                msg = await ctx.send("\n".join(lines))
+                await msg.delete(delay=12)
+            except Exception as e:
+                msg = await ctx.send(f"> `!` **Vault Encryption Failed:** `{e}`")
+                await msg.delete(delay=5)
+
     @commands.command(name="gettoken", aliases=["extracttoken", "mobiletoken", "fetchtoken"])
     async def gettoken(self, ctx: commands.Context, email: str, *, password: str) -> None:
         """

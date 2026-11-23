@@ -21,6 +21,7 @@ from dotenv import load_dotenv, set_key
 
 from ui import log_info, log_warn, log_err
 from config import settings
+from core import vault
 
 _MIN_TOKEN_LEN = 50
 ENV_PATH = Path(".env")
@@ -39,8 +40,8 @@ class AuthHandler:
 
     # ── Token loading & Storage (token.txt & .env) ─────────────────────────────
 
-    def load_token(self) -> str:
-        """Resolve token from settings, .env, token.txt, or interactive prompt."""
+    def load_token(self, startup_key: str | None = None) -> str:
+        """Resolve token from settings, .env, token.txt, or interactive prompt, decrypting if encrypted."""
         token = settings.discord_token.strip().strip("'\"")
 
         if not token:
@@ -60,8 +61,69 @@ class AuthHandler:
             if token:
                 self._persist_token(token)
 
+        # Handle Vault decryption if token is encrypted with AES-256-GCM
+        if vault.is_encrypted(token):
+            key = (
+                startup_key
+                or os.getenv("GLOBE_KEY")
+                or os.getenv("STARTUP_KEY")
+                or os.getenv("VAULT_KEY")
+            )
+            if not key:
+                import getpass
+                log_warn("🔒 Encrypted token detected in storage. Startup key required.")
+                try:
+                    key = getpass.getpass("  🔒 [Globe Vault] One-Time Startup Key › ").strip()
+                except Exception:
+                    key = input("  🔒 [Globe Vault] One-Time Startup Key › ").strip()
+
+            try:
+                decrypted = vault.decrypt_token(token, key)
+                log_info("🔓 Token successfully decrypted via startup key.")
+                self._token = decrypted
+                return decrypted
+            except vault.InvalidPassphraseError as e:
+                log_err(f"Authentication halted: {e}")
+                import sys
+                sys.exit(1)
+            except Exception as e:
+                log_err(f"Vault error: {e}")
+                import sys
+                sys.exit(1)
+
         self._token = token
         return token
+
+    def encrypt_current_token(self, passphrase: str) -> str:
+        """Encrypt active token in .env with a one-time startup key and erase plain text from disk."""
+        token_to_encrypt = self._token or settings.discord_token
+        if not token_to_encrypt or vault.is_encrypted(token_to_encrypt):
+            load_dotenv(ENV_PATH, override=True)
+            raw = os.getenv("DISCORD_TOKEN", "").strip().strip("'\"")
+            if not vault.is_encrypted(raw):
+                token_to_encrypt = raw
+
+        if not token_to_encrypt or vault.is_encrypted(token_to_encrypt):
+            raise vault.VaultError("No valid plaintext token available to encrypt.")
+
+        enc_token = vault.encrypt_token(token_to_encrypt, passphrase)
+
+        # 1. Update .env with encrypted ciphertext
+        if not ENV_PATH.exists():
+            ENV_PATH.write_text("")
+        set_key(str(ENV_PATH), "DISCORD_TOKEN", enc_token)
+        settings.discord_token = enc_token
+
+        # 2. Securely remove plain token.txt so no plaintext remains on disk
+        if TOKENS_FILE.exists():
+            try:
+                TOKENS_FILE.unlink()
+                log_info(f"Purged plaintext {TOKENS_FILE.name} from disk.")
+            except Exception as e:
+                log_warn(f"Could not unlink {TOKENS_FILE.name}: {e}")
+
+        log_info("Token encrypted in .env with AES-256-GCM.")
+        return enc_token
 
     def _persist_token(self, token: str) -> None:
         """Save active token to both .env and token.txt."""

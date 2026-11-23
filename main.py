@@ -39,23 +39,46 @@ from ui import log_err, log_info, log_warn, banner, console
     help=f"Command prefix (default: {settings.prefix})",
 )
 @click.option(
+    "--key", "-k",
+    default=None,
+    help="One-time startup key to decrypt vault token (env: GLOBE_KEY)",
+    envvar="GLOBE_KEY",
+)
+@click.option(
+    "--encrypt",
+    default=None,
+    help="Encrypt stored token in .env with the given passphrase and exit",
+)
+@click.option(
     "--debug", "-d",
     is_flag=True,
     default=False,
     help="Enable debug logging",
 )
-def main(token: str | None, prefix: str | None, debug: bool) -> None:
+def main(token: str | None, prefix: str | None, key: str | None, encrypt: str | None, debug: bool) -> None:
     """🌐 Globe — All-in-One Discord Selfbot"""
     if debug:
         import logging
         logging.basicConfig(level=logging.DEBUG)
 
+    # Handle one-time token encryption request
+    if encrypt:
+        try:
+            auth.load_token()
+            enc = auth.encrypt_current_token(encrypt)
+            log_info(f"Token encrypted into .env with AES-256-GCM.\nCiphertext: {enc[:32]}…")
+            log_info("Start the bot with: python main.py --key <passphrase> (or export GLOBE_KEY=<passphrase>)")
+            sys.exit(0)
+        except Exception as e:
+            log_err(f"Encryption failed: {e}")
+            sys.exit(1)
+
     # Override prefix from CLI
     if prefix:
         settings.prefix = prefix  # type: ignore[attr-defined]
 
-    # Resolve and validate token
-    resolved_token = token or auth.load_token()
+    # Resolve and validate token (with Vault decryption support)
+    resolved_token = token or auth.load_token(startup_key=key)
     if not auth.validate_token(resolved_token):
         log_err("Invalid token. Exiting.")
         sys.exit(1)
