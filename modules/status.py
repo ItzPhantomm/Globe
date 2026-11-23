@@ -100,6 +100,8 @@ class Status(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self._init_done: bool = False
+        self._spoofer_running: bool = False
+        self._spoofer_cancel: bool = False
 
     async def apply_default_rpc(self) -> bool:
         """Apply official default Globe Rich Presence and verify."""
@@ -127,10 +129,12 @@ class Status(commands.Cog):
     async def defaultrpc(self, ctx: commands.Context) -> None:
         """Reset presence back to default Globe Rich Presence."""
         await ctx.message.delete()
+        if self._spoofer_running:
+            self._spoofer_cancel = True
         user_id = self.bot.user.id if self.bot.user else ctx.author.id
         start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
         activities = get_default_globe_activities(user_id, start_epoch)
-        await self.bot.change_presence(activities=activities)
+        await self.bot.change_presence(activities=activities, edit_settings=False)
         msg = await ctx.send("🌐 Presence reset to official **Globe Rich Presence**.")
         await msg.delete(delay=4)
 
@@ -301,93 +305,216 @@ class Status(commands.Cog):
     # ── Batch Badge & Game Variety Telemetry Spoofer ──────────────────────────
 
     @commands.command(name="badgespoofer", aliases=["spoofbadges", "batchspoofer", "gamespoofer"])
-    async def badgespoofer(self, ctx: commands.Context, target: str = "variety", count: int = 15) -> None:
+    async def badgespoofer(self, ctx: commands.Context, *args: str) -> None:
         """
         Simulate detectable game sessions to advance Discord's Game Variety and Game Time badges.
-        Usage: `g.badgespoofer variety [count]` or `g.badgespoofer play <game_name>`
+        Usage:
+          g.badgespoofer [count] [interval]
+          g.badgespoofer variety [count] [interval]
+          g.badgespoofer play <game_name>
+          g.badgespoofer stop
         """
         await ctx.message.delete()
         if not self.bot.is_owner_id(ctx.author.id):
             return
 
-        mode = target.strip().lower()
-        if mode in ("variety", "batch", "all"):
-            batch_count = max(1, min(count, 35))
-            status_msg = await ctx.send(f"> `—` **Fetching detectable games catalog from Discord…**")
+        # 1. Stop / Cancel sub-command
+        if args and args[0].lower() in ("stop", "cancel", "halt", "quit", "exit"):
+            if self._spoofer_running:
+                self._spoofer_cancel = True
+                msg = await ctx.send("> `—` **Halting active spoofer session…**")
+                await msg.delete(delay=4)
+            else:
+                user_id = self.bot.user.id if self.bot.user else ctx.author.id
+                start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
+                activities = get_default_globe_activities(user_id, start_epoch)
+                await self.bot.change_presence(activities=activities, edit_settings=False)
+                msg = await ctx.send("> `—` **No active spoofer. Restored Globe Rich Presence.**")
+                await msg.delete(delay=4)
+            return
 
-            try:
-                import httpx
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.get("https://discord.com/api/v9/applications/detectable")
-                    games_catalog = resp.json()
-            except Exception as e:
-                await status_msg.edit(content=f"> `!` **Catalog Fetch Failed:** `{e}`")
-                await status_msg.delete(delay=5)
-                return
-
-            # Filter valid games with executable signatures
-            valid_games = [g for g in games_catalog if g.get("id") and g.get("name") and g.get("executables")]
-            if not valid_games:
-                await status_msg.edit(content="> `!` **No detectable games found in Discord catalog.**")
-                await status_msg.delete(delay=5)
-                return
-
-            import random
-            selected_games = random.sample(valid_games, min(batch_count, len(valid_games)))
-
-            lines = [
-                f"> `-` **Batch Game Variety Spoofer Activated**",
-                f"> `—` **Simulating:** `{len(selected_games)}` unique titles sequentially",
-                f"> `—` **Cadence:** `3.5s` hold per game session (anti-flood guard)",
-                "> `—` **Target Badge:** Game Variety & Playtime Milestone",
-                "> `•` *Starting session cycle now…*",
-            ]
-            await status_msg.edit(content="\n".join(lines))
-
-            # Cycle through games via Gateway presence updates
-            for idx, g in enumerate(selected_games, 1):
-                g_id = int(g["id"])
-                g_name = g["name"]
-                
-                # Create game activity
-                game_act = discord.Game(name=g_name, application_id=g_id)
-                try:
-                    await self.bot.change_presence(activity=game_act)
-                except Exception:
-                    pass
-
-                await asyncio.sleep(3.5)
-
-            # Restore default Globe Rich Presence
-            user_id = self.bot.user.id if self.bot.user else ctx.author.id
-            start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
-            activities = get_default_globe_activities(user_id, start_epoch)
-            await self.bot.change_presence(activities=activities)
-
-            sample_titles = ", ".join(f"`{g.get('name', 'Unknown')}`" for g in selected_games[:4])
-            completed_lines = [
-                f"> `-` **Batch Game Variety Spoof Completed**",
-                f"> `—` **Processed:** `{len(selected_games)}` verified titles registered to profile telemetry",
-                f"> `—` **Sample Processed:** {sample_titles}…",
-                "> `—` **Status:** Presence restored to default Globe Rich Presence",
-                "> `•` *Note: Discord's badge index pipeline refreshes every 24–72 hours.*",
+        # 2. Single game playtime farming sub-command (e.g. g.badgespoofer play Counter-Strike 2)
+        if args and args[0].lower() == "play":
+            game_name = " ".join(args[1:]).strip() if len(args) > 1 else "Grand Theft Auto V"
+            if not game_name:
+                game_name = "Grand Theft Auto V"
+            game_act = discord.Activity(
+                name=game_name,
+                type=discord.ActivityType.playing,
+                timestamps={"start": int(time.time() * 1000)},
+                details="In Game",
+                state="Playing",
+            )
+            await self.bot.change_presence(activity=game_act, edit_settings=False)
+            play_lines = [
+                "> `-` **Single Game Telemetry Active**",
+                f"> `—` **Game Title:** `{game_name}`",
+                "> `—` **Status:** Live session active · Accumulating playtime towards **Game Time Badge**",
+                f"> `•` *Run `{settings.prefix}badgespoofer stop` or `{settings.prefix}defaultrpc` to restore Globe presence.*",
                 "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
             ]
-            await status_msg.edit(content="\n".join(completed_lines))
-            await status_msg.delete(delay=12)
+            msg = await ctx.send("\n".join(play_lines))
+            await msg.delete(delay=15)
+            return
 
+        # 3. Batch Game Variety Mode
+        if self._spoofer_running:
+            msg = await ctx.send("> `!` **A spoofer session is already running.** Type `g.badgespoofer stop` first.")
+            await msg.delete(delay=5)
+            return
+
+        # Parse count and interval from args
+        count = 15
+        interval = 5.0
+        numeric_args: list[int] = []
+        for a in args:
+            if a.isdigit():
+                numeric_args.append(int(a))
+
+        if len(numeric_args) >= 1:
+            count = max(1, min(numeric_args[0], 50))
+        if len(numeric_args) >= 2:
+            interval = max(3.0, min(float(numeric_args[1]), 30.0))
+
+        status_msg = await ctx.send("> `—` **Connecting to Discord Detectable Catalog…**")
+
+        try:
+            import httpx
+            headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
+            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+                resp = await client.get("https://discord.com/api/v9/applications/detectable")
+                games_catalog = resp.json()
+        except Exception as e:
+            await status_msg.edit(content=f"> `!` **Catalog Fetch Failed:** `{e}`")
+            await status_msg.delete(delay=6)
+            return
+
+        # Filter valid games with executable signatures and IDs
+        valid_games = [g for g in games_catalog if g.get("id") and g.get("name") and g.get("executables")]
+        if not valid_games:
+            await status_msg.edit(content="> `!` **No detectable games found in Discord catalog.**")
+            await status_msg.delete(delay=5)
+            return
+
+        import random
+        selected_games = random.sample(valid_games, min(count, len(valid_games)))
+        total_games = len(selected_games)
+
+        self._spoofer_running = True
+        self._spoofer_cancel = False
+        batch_start = time.time()
+
+        initial_lines = [
+            "> `-` **Batch Game Variety Spoofer — Starting**",
+            f"> `—` **Target Count:** `{total_games}` verified titles",
+            f"> `—` **Hold Pace:** `{interval:.0f}s` per title (anti-flood guard)",
+            "> `—` **Target Badge:** Discord Game Variety & Game Time Badges",
+            "> `•` *Initiating gateway session stream now…*",
+            "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]
+        await status_msg.edit(content="\n".join(initial_lines))
+        await asyncio.sleep(1.5)
+
+        idx = 0
+        for idx, g in enumerate(selected_games, 1):
+            if self._spoofer_cancel:
+                break
+
+            g_id = int(g["id"])
+            g_name = g.get("name", "Unknown Game")
+            g_icon = g.get("icon_hash")
+
+            act_kwargs: dict[str, Any] = {
+                "name": g_name,
+                "type": discord.ActivityType.playing,
+                "application_id": g_id,
+                "timestamps": {"start": int(time.time() * 1000)},
+                "details": "In Game",
+                "state": "Playing",
+            }
+            if g_icon:
+                act_kwargs["assets"] = {"large_image": g_icon, "large_text": g_name}
+
+            game_act = discord.Activity(**act_kwargs)
+
+            try:
+                # edit_settings=False ensures Gateway Opcode 3 is sent directly without hitting REST settings rate limits
+                await self.bot.change_presence(activity=game_act, edit_settings=False)
+            except Exception as e:
+                log_err(f"Presence broadcast error during spoofing: {e}")
+
+            # Calculate live timing and status
+            now = time.time()
+            elapsed_sec = int(now - batch_start)
+            remaining_sec = max(0, int((total_games - idx) * interval))
+            elapsed_str = f"{elapsed_sec // 60:02d}:{elapsed_sec % 60:02d}"
+            remaining_str = f"{remaining_sec // 60:02d}:{remaining_sec % 60:02d}"
+            pct = int((idx / total_games) * 100)
+
+            live_lines = [
+                "> `-` **Batch Game Variety Spoofer — Active**",
+                f"> `—` **Live Progress:** `[{idx}/{total_games}]` ({pct}%)",
+                f"> `—` **Active Game:** `{g_name}`",
+                f"> `—` **Application ID:** `{g_id}`",
+                f"> `—` **Live Time:** `{elapsed_str}` elapsed · `{remaining_str}` remaining",
+                f"> `—` **Hold Cadence:** `{interval:.0f}s` per detectable title",
+                "> `•` *Live status streaming to Discord Gateway telemetry…*",
+                "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+            ]
+            try:
+                await status_msg.edit(content="\n".join(live_lines))
+            except Exception:
+                pass
+
+            # Sleep in 0.5s increments to respond immediately if user cancels
+            steps = int(interval * 2)
+            for _ in range(steps):
+                if self._spoofer_cancel:
+                    break
+                await asyncio.sleep(0.5)
+
+        # Restore official Globe Rich Presence
+        user_id = self.bot.user.id if self.bot.user else ctx.author.id
+        start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
+        activities = get_default_globe_activities(user_id, start_epoch)
+        try:
+            await self.bot.change_presence(activities=activities, edit_settings=False)
+        except Exception as e:
+            log_err(f"Failed to restore Globe presence: {e}")
+
+        total_sec = int(time.time() - batch_start)
+        total_str = f"{total_sec // 60:02d}:{total_sec % 60:02d}"
+
+        if self._spoofer_cancel:
+            done_lines = [
+                "> `-` **Batch Game Variety Spoofer — Stopped**",
+                f"> `—` **Status:** `Cancelled by user`",
+                f"> `—` **Titles Spoofed:** `{idx - 1}/{total_games}` verified applications",
+                f"> `—` **Session Duration:** `{total_str}`",
+                "> `—` **Rich Presence:** Restored to official Globe Rich Presence",
+                "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+            ]
         else:
-            # Single game spoof mode (e.g. `g.badgespoofer play Grand Theft Auto V`)
-            game_name = target if count == 15 else f"{target} {count}"
-            game_act = discord.Game(name=game_name)
-            await self.bot.change_presence(activity=game_act)
-            msg = await ctx.send(
-                f"> `-` **Single Game Telemetry Active**\n"
-                f"> `—` **Game:** `{game_name}`\n"
-                f"> `—` Accumulating playtime towards **Game Time Badge**.\n"
-                f"> `•` *Run `{settings.prefix}defaultrpc` anytime to return to Globe presence.*"
-            )
-            await msg.delete(delay=8)
+            sample_titles = ", ".join(f"`{g.get('name', 'Unknown')}`" for g in selected_games[:5])
+            done_lines = [
+                "> `-` **Batch Game Variety Spoofer — Done**",
+                f"> `—` **Status:** `Completed`",
+                f"> `—` **Titles Simulated:** `{total_games}/{total_games}` verified applications registered",
+                f"> `—` **Total Elapsed:** `{total_str}`",
+                f"> `—` **Sample Processed:** {sample_titles}…",
+                "> `—` **Rich Presence:** Restored to official Globe Rich Presence",
+                "> `•` *Discord Game Variety badge refreshes within 24–72 hours on user profile cache.*",
+                "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+            ]
+
+        try:
+            await status_msg.edit(content="\n".join(done_lines))
+        except Exception:
+            pass
+
+        # IMPORTANT: Keep the completed message permanently in channel (do not delete)
+        self._spoofer_running = False
+        self._spoofer_cancel = False
 
 
 async def setup(bot: commands.Bot) -> None:
