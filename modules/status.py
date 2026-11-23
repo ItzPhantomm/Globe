@@ -8,7 +8,9 @@ Synchronizes both Rich Presence Activity and Custom Status to ensure 100% visibi
 
 from __future__ import annotations
 
+import asyncio
 import time
+from typing import Any
 import discord
 from discord.ext import commands
 
@@ -39,22 +41,30 @@ def get_default_globe_activities(user_id: int | None = None, start_time: float |
 
     # 1. Primary Rich Presence Activity (Watching Globe with elapsed timer and interactive buttons)
     # Uses official Discord Application ID & verified Rich Presence Art Asset Snowflake ID
-    # Constructs both native ActivityButton instances and raw metadata fallback
-    btn1 = discord.ActivityButton(label="Try Globe!", url=GLOBE_REPO_URL)
-    btn2 = discord.ActivityButton(label="Add Friend", url=friend_link)
+    # Fully compatible across both modern and legacy discord.py-self builds (Android/Termux & Linux)
+    activity_button_cls = getattr(discord, "ActivityButton", None)
+    buttons_param: list[Any]
+    if activity_button_cls is not None:
+        try:
+            btn1 = activity_button_cls(label="Try Globe!", url=GLOBE_REPO_URL)
+            btn2 = activity_button_cls(label="Add Friend", url=friend_link)
+            buttons_param = [btn1, btn2]
+        except Exception:
+            buttons_param = ["Try Globe!", "Add Friend"]
+    else:
+        buttons_param = ["Try Globe!", "Add Friend"]
 
     try:
-        from datetime import datetime, timezone
-        dt = datetime.fromtimestamp((start_time if start_time else time.time()), tz=timezone.utc)
         primary_act = discord.Activity(
             name="Globe",
             type=discord.ActivityType.watching,
             application_id=GLOBE_APP_ID,
             details="Globe",
             state="Active. Made by ylemn",
-            timestamps=discord.ActivityTimestamps(start=dt),
-            assets=discord.ActivityAssets(large_image=GLOBE_ASSET_ID, large_text="Globe Selfbot"),
-            buttons=[btn1, btn2],
+            timestamps={"start": start_ms},
+            assets={"large_image": GLOBE_ASSET_ID, "large_text": "Globe Selfbot"},
+            buttons=buttons_param,
+            metadata={"button_urls": [GLOBE_REPO_URL, friend_link]},
         )
     except Exception:
         rpc_payload = {
@@ -354,10 +364,11 @@ class Status(commands.Cog):
             activities = get_default_globe_activities(user_id, start_epoch)
             await self.bot.change_presence(activities=activities)
 
+            sample_titles = ", ".join(f"`{g.get('name', 'Unknown')}`" for g in selected_games[:4])
             completed_lines = [
                 f"> `-` **Batch Game Variety Spoof Completed**",
                 f"> `—` **Processed:** `{len(selected_games)}` verified titles registered to profile telemetry",
-                f"> `—` **Sample Processed:** {', '.join(f'`{g[\"name\"]}`' for g in selected_games[:4])}…",
+                f"> `—` **Sample Processed:** {sample_titles}…",
                 "> `—` **Status:** Presence restored to default Globe Rich Presence",
                 "> `•` *Note: Discord's badge index pipeline refreshes every 24–72 hours.*",
                 "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
