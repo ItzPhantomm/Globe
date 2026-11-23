@@ -58,6 +58,24 @@ def _parse_duration(text: str) -> float | None:
         return None
 
 
+# ── Morse Code Translation Tables ─────────────────────────────────────────────
+
+MORSE_MAP: dict[str, str] = {
+    "A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".", "F": "..-.",
+    "G": "--.", "H": "....", "I": "..", "J": ".---", "K": "-.-", "L": ".-..",
+    "M": "--", "N": "-.", "O": "---", "P": ".--.", "Q": "--.-", "R": ".-.",
+    "S": "...", "T": "-", "U": "..-", "V": "...-", "W": ".--", "X": "-..-",
+    "Y": "-.--", "Z": "--..",
+    "1": ".----", "2": "..---", "3": "...--", "4": "....-", "5": ".....",
+    "6": "-....", "7": "--...", "8": "---..", "9": "----.", "0": "-----",
+    ",": "--..--", ".": ".-.-.-", "?": "..--..", "/": "-..-.", "-": "-....-",
+    "(": "-.--.", ")": "-.--.-", "!": "-.-.--", "&": ".-...", ":": "---...",
+    ";": "-.-.-.", "=": "-...-", "+": ".-.-.", "_": "..--.-", '"': ".-..-.",
+    "$": "...-..-", "@": ".--.-.", "'": ".----.",
+}
+REVERSE_MORSE_MAP: dict[str, str] = {v: k for k, v in MORSE_MAP.items()}
+
+
 class Tools(commands.Cog):
     """Network inspection, token auditing, nitro sniper, reminders & automation."""
 
@@ -375,6 +393,96 @@ class Tools(commands.Cog):
             await ctx.send(f"📖 **Urban: {term}**\n>>> {defn}")
         except Exception as e:
             await ctx.send(f"❌ Lookup failed: {e}", delete_after=5)
+
+    # ── Morse Code Converter & Decoder ────────────────────────────────────────
+
+    @commands.command(name="morse", aliases=["morsecode", "morsify"])
+    async def morse(self, ctx: commands.Context, *, text: str | None = None) -> None:
+        """
+        Convert text to Morse code or decode Morse code into plain text.
+        Auto-detects whether the input is text or Morse code.
+        Can be used by replying to a message or providing text directly.
+        """
+        await ctx.message.delete()
+        raw_text = text
+        if not raw_text and ctx.message.reference and ctx.message.reference.message_id:
+            try:
+                ref_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+                raw_text = ref_msg.content.strip()
+            except Exception:
+                pass
+
+        if not raw_text:
+            msg = await ctx.send(f"> `!` **Usage:** `{settings.prefix}morse <text or morse code>` *(or reply to a message)*")
+            await msg.delete(delay=5)
+            return
+
+        cleaned_check = set(raw_text.replace(" ", "").replace("/", "").replace("|", "").replace("-", "").replace(".", ""))
+        is_morse = len(cleaned_check) == 0 and ("." in raw_text or "-" in raw_text)
+
+        if is_morse:
+            clean = raw_text.replace(" / ", " | ").replace("   ", " | ")
+            words = clean.split("|")
+            decoded_words: list[str] = []
+            for w in words:
+                tokens = w.strip().split()
+                chars = [REVERSE_MORSE_MAP.get(token, "?") for token in tokens if token]
+                if chars:
+                    decoded_words.append("".join(chars))
+            result = " ".join(decoded_words)
+            action = "Decoded (Morse → Text)"
+        else:
+            words = raw_text.upper().split(" ")
+            morse_words: list[str] = []
+            for w in words:
+                morse_chars = [MORSE_MAP[c] for c in w if c in MORSE_MAP]
+                if morse_chars:
+                    morse_words.append(" ".join(morse_chars))
+            result = " / ".join(morse_words)
+            action = "Encoded (Text → Morse)"
+
+        lines = [
+            f"> `-` **Morse Code Converter** · *{action}*",
+            f"> `—` **Input:** `{raw_text[:120]}`",
+            f"> `•` **Result:** `{result}`",
+            f"> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]
+        await ctx.send("\n".join(lines))
+
+    @commands.command(name="demorse", aliases=["unmorse", "morsedecode"])
+    async def demorse(self, ctx: commands.Context, *, morse_input: str | None = None) -> None:
+        """Decode Morse code into readable plain text."""
+        await ctx.message.delete()
+        raw_code = morse_input
+        if not raw_code and ctx.message.reference and ctx.message.reference.message_id:
+            try:
+                ref_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+                raw_code = ref_msg.content.strip()
+            except Exception:
+                pass
+
+        if not raw_code:
+            msg = await ctx.send(f"> `!` **Usage:** `{settings.prefix}demorse <morse code>` *(or reply to a message)*")
+            await msg.delete(delay=5)
+            return
+
+        clean = raw_code.replace(" / ", " | ").replace("   ", " | ")
+        words = clean.split("|")
+        decoded_words: list[str] = []
+        for w in words:
+            tokens = w.strip().split()
+            chars = [REVERSE_MORSE_MAP.get(token, "?") for token in tokens if token]
+            if chars:
+                decoded_words.append("".join(chars))
+        result = " ".join(decoded_words)
+
+        lines = [
+            "> `-` **Morse Code Decoder**",
+            f"> `—` **Code:** `{raw_code[:120]}`",
+            f"> `•` **Plaintext:** `{result}`",
+            "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]
+        await ctx.send("\n".join(lines))
 
     # ── Advanced OSINT Link & Invite / Guild Intelligence ────────────────────
 
