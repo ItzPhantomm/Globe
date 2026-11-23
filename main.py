@@ -78,7 +78,7 @@ def main(token: str | None, prefix: str | None, key: str | None, encrypt: str | 
         settings.prefix = prefix  # type: ignore[attr-defined]
 
     # Resolve and validate token (with Vault decryption support)
-    resolved_token = token or auth.load_token(startup_key=key)
+    resolved_token = auth.load_token(startup_key=key, override_token=token)
     if not auth.validate_token(resolved_token):
         log_err("Invalid token. Exiting.")
         sys.exit(1)

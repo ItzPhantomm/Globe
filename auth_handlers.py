@@ -40,9 +40,9 @@ class AuthHandler:
 
     # ── Token loading & Storage (token.txt & .env) ─────────────────────────────
 
-    def load_token(self, startup_key: str | None = None) -> str:
-        """Resolve token from settings, .env, token.txt, or interactive prompt, decrypting if encrypted."""
-        token = settings.discord_token.strip().strip("'\"")
+    def load_token(self, startup_key: str | None = None, override_token: str | None = None) -> str:
+        """Resolve token from override, settings, .env, token.txt, or interactive prompt, decrypting if encrypted."""
+        token = (override_token or settings.discord_token or "").strip().strip("'\"")
 
         if not token:
             load_dotenv(ENV_PATH, override=True)
