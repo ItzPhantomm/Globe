@@ -39,23 +39,41 @@ def get_default_globe_activities(user_id: int | None = None, start_time: float |
 
     # 1. Primary Rich Presence Activity (Watching Globe with elapsed timer and interactive buttons)
     # Uses official Discord Application ID & verified Rich Presence Art Asset Snowflake ID
-    rpc_payload = {
-        "name": "Globe",
-        "type": 3,
-        "application_id": GLOBE_APP_ID,
-        "details": "Globe",
-        "state": "Active. Made by ylemn",
-        "timestamps": {"start": start_ms},
-        "assets": {
-            "large_image": GLOBE_ASSET_ID,
-            "large_text": "Globe Selfbot",
-        },
-        "buttons": ["Try Globe!", "Add Friend"],
-        "metadata": {
-            "button_urls": [GLOBE_REPO_URL, friend_link],
-        },
-    }
-    primary_act = CustomRpcActivity(rpc_payload)
+    # Constructs both native ActivityButton instances and raw metadata fallback
+    btn1 = discord.ActivityButton(label="Try Globe!", url=GLOBE_REPO_URL)
+    btn2 = discord.ActivityButton(label="Add Friend", url=friend_link)
+
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromtimestamp((start_time if start_time else time.time()), tz=timezone.utc)
+        primary_act = discord.Activity(
+            name="Globe",
+            type=discord.ActivityType.watching,
+            application_id=GLOBE_APP_ID,
+            details="Globe",
+            state="Active. Made by ylemn",
+            timestamps=discord.ActivityTimestamps(start=dt),
+            assets=discord.ActivityAssets(large_image=GLOBE_ASSET_ID, large_text="Globe Selfbot"),
+            buttons=[btn1, btn2],
+        )
+    except Exception:
+        rpc_payload = {
+            "name": "Globe",
+            "type": 3,
+            "application_id": GLOBE_APP_ID,
+            "details": "Globe",
+            "state": "Active. Made by ylemn",
+            "timestamps": {"start": start_ms},
+            "assets": {
+                "large_image": GLOBE_ASSET_ID,
+                "large_text": "Globe Selfbot",
+            },
+            "buttons": ["Try Globe!", "Add Friend"],
+            "metadata": {
+                "button_urls": [GLOBE_REPO_URL, friend_link],
+            },
+        }
+        primary_act = CustomRpcActivity(rpc_payload)
 
     # 2. Custom Status Activity (Guarantees public visibility to non-friends, mutual server members, and DMs)
     custom_status = discord.CustomActivity(
