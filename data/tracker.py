@@ -21,10 +21,20 @@ class MessageTracker:
     def __init__(self, db_path: Path = DB_PATH) -> None:
         self.db_path = db_path
         self._init_db()
+        self._conn: sqlite3.Connection | None = None
+
+    def _get_connection(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL;")
+            self._conn.execute("PRAGMA synchronous=NORMAL;")
+        return self._conn
 
     def _init_db(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.db_path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
@@ -47,11 +57,15 @@ class MessageTracker:
     def record_message(self, author_id: int, guild_id: int | None, channel_id: int) -> None:
         today = datetime.utcnow().strftime("%Y-%m-%d")
         now = time.time()
-        with sqlite3.connect(self.db_path) as conn:
+        try:
+            conn = self._get_connection()
             conn.execute(
                 "INSERT INTO messages (author_id, guild_id, channel_id, date, timestamp) VALUES (?, ?, ?, ?, ?)",
                 (author_id, guild_id if guild_id else 0, channel_id, today, now),
             )
+            conn.commit()
+        except Exception:
+            pass
 
     def get_stats(self, author_id: int, guild_id: int | None = None) -> dict[str, int]:
         """
