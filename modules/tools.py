@@ -81,6 +81,7 @@ class Tools(commands.Cog):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        self._http_client: httpx.AsyncClient | None = None
         self._reminders: list[asyncio.Task] = []
         self._nitro_enabled: bool = settings.nitro_sniper
         self._sniped_codes: set[str] = set()
@@ -89,6 +90,17 @@ class Tools(commands.Cog):
         self._privacy_enabled: bool = False
         self._privacy_until: float | None = None
         self._pending_privacy_messages: dict[int, list[int]] = {}
+
+    def _get_http_client(self) -> httpx.AsyncClient:
+        """Provide a persistent, connection-pooled HTTP client instance."""
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(timeout=10.0, follow_redirects=True)
+        return self._http_client
+
+    async def cog_unload(self) -> None:
+        """Release persistent HTTP client connections on module reload."""
+        if self._http_client and not self._http_client.is_closed:
+            await self._http_client.aclose()
 
     # ── DM Privacy Mode (Auto-delete seen messages in DMs) ─────────────────────
 
@@ -216,34 +228,34 @@ class Tools(commands.Cog):
 
         url = "https://discord.com/api/v9/users/@me"
         try:
-            async with httpx.AsyncClient(timeout=8) as client:
-                resp = await client.get(url, headers={"Authorization": clean})
-                if resp.status_code == 200:
-                    d = resp.json()
-                    uname = f"{d.get('username')}#{d.get('discriminator', '0')}"
-                    uid = d.get("id")
-                    email = d.get("email") or "None"
-                    phone = d.get("phone") or "None"
-                    mfa = "Enabled" if d.get("mfa_enabled") else "Disabled"
-                    nitro_types = {0: "None", 1: "Nitro Classic", 2: "Nitro", 3: "Nitro Basic"}
-                    nitro = nitro_types.get(d.get("premium_type", 0), "None")
-                    verified = "Yes" if d.get("verified") else "No"
+            client = self._get_http_client()
+            resp = await client.get(url, headers={"Authorization": clean})
+            if resp.status_code == 200:
+                d = resp.json()
+                uname = f"{d.get('username')}#{d.get('discriminator', '0')}"
+                uid = d.get("id")
+                email = d.get("email") or "None"
+                phone = d.get("phone") or "None"
+                mfa = "Enabled" if d.get("mfa_enabled") else "Disabled"
+                nitro_types = {0: "None", 1: "Nitro Classic", 2: "Nitro", 3: "Nitro Basic"}
+                nitro = nitro_types.get(d.get("premium_type", 0), "None")
+                verified = "Yes" if d.get("verified") else "No"
 
-                    lines = [
-                        f"🔒 **Token Status: VALID**",
-                        f"**User:** `{uname}` (`{uid}`)",
-                        f"**Email:** `{email}` (Verified: {verified})",
-                        f"**Phone:** `{phone}`",
-                        f"**2FA / MFA:** `{mfa}`",
-                        f"**Nitro Tier:** `{nitro}`",
-                    ]
-                    await ctx.send("\n".join(lines), delete_after=20)
-                elif resp.status_code == 401:
-                    await ctx.send("❌ **Token Status: INVALID / EXPIRED** (HTTP 401)", delete_after=6)
-                elif resp.status_code == 403:
-                    await ctx.send("⚠️ **Token Status: LOCKED / PHONE VERIFICATION REQUIRED** (HTTP 403)", delete_after=6)
-                else:
-                    await ctx.send(f"⚠️ Token returned HTTP {resp.status_code}.", delete_after=6)
+                lines = [
+                    f"🔒 **Token Status: VALID**",
+                    f"**User:** `{uname}` (`{uid}`)",
+                    f"**Email:** `{email}` (Verified: {verified})",
+                    f"**Phone:** `{phone}`",
+                    f"**2FA / MFA:** `{mfa}`",
+                    f"**Nitro Tier:** `{nitro}`",
+                ]
+                await ctx.send("\n".join(lines), delete_after=20)
+            elif resp.status_code == 401:
+                await ctx.send("❌ **Token Status: INVALID / EXPIRED** (HTTP 401)", delete_after=6)
+            elif resp.status_code == 403:
+                await ctx.send("⚠️ **Token Status: LOCKED / PHONE VERIFICATION REQUIRED** (HTTP 403)", delete_after=6)
+            else:
+                await ctx.send(f"⚠️ Token returned HTTP {resp.status_code}.", delete_after=6)
         except Exception as e:
             await ctx.send(f"❌ Token check error: {e}", delete_after=5)
 
@@ -255,9 +267,9 @@ class Tools(commands.Cog):
         await ctx.message.delete()
         try:
             target = ip_or_host.replace("https://", "").replace("http://", "").split("/")[0]
-            async with httpx.AsyncClient(timeout=8) as client:
-                r = await client.get(f"http://ip-api.com/json/{target}?fields=status,message,country,regionName,city,zip,lat,lon,timezone,isp,org,as,query")
-                data = r.json()
+            client = self._get_http_client()
+            r = await client.get(f"http://ip-api.com/json/{target}?fields=status,message,country,regionName,city,zip,lat,lon,timezone,isp,org,as,query")
+            data = r.json()
 
             if data.get("status") == "success":
                 lines = [
@@ -294,12 +306,12 @@ class Tools(commands.Cog):
         await ctx.message.delete()
         target = url if url.startswith(("http://", "https://")) else f"https://{url}"
         try:
-            async with httpx.AsyncClient(timeout=8) as client:
-                resp = await client.head(target, follow_redirects=True)
-                lines = [f"🌐 **HTTP Headers for `{target}`** (Status: `{resp.status_code}`)"]
-                for k, v in list(resp.headers.items())[:12]:
-                    lines.append(f"• **{k}:** `{v[:80]}`")
-                await ctx.send("\n".join(lines), delete_after=20)
+            client = self._get_http_client()
+            resp = await client.head(target, follow_redirects=True)
+            lines = [f"🌐 **HTTP Headers for `{target}`** (Status: `{resp.status_code}`)"]
+            for k, v in list(resp.headers.items())[:12]:
+                lines.append(f"• **{k}:** `{v[:80]}`")
+            await ctx.send("\n".join(lines), delete_after=20)
         except Exception as e:
             await ctx.send(f"❌ Header fetch error: {e}", delete_after=5)
 
@@ -312,9 +324,9 @@ class Tools(commands.Cog):
         coin_id = alias_map.get(coin_clean, coin_clean)
 
         try:
-            async with httpx.AsyncClient(timeout=8) as client:
-                r = await client.get(f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd&include_24hr_change=true")
-                data = r.json()
+            client = self._get_http_client()
+            r = await client.get(f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd&include_24hr_change=true")
+            data = r.json()
 
             if coin_id in data:
                 price = data[coin_id]["usd"]
@@ -370,9 +382,9 @@ class Tools(commands.Cog):
         await ctx.message.delete()
         url = f"https://wttr.in/{quote_plus(location)}?format=4"
         try:
-            async with httpx.AsyncClient(timeout=8) as client:
-                resp = await client.get(url, follow_redirects=True)
-                await ctx.send(f"🌤️ {resp.text.strip()}")
+            client = self._get_http_client()
+            resp = await client.get(url, follow_redirects=True)
+            await ctx.send(f"🌤️ {resp.text.strip()}")
         except Exception as e:
             await ctx.send(f"❌ Weather check failed: {e}", delete_after=4)
 
@@ -382,9 +394,9 @@ class Tools(commands.Cog):
         await ctx.message.delete()
         url = f"https://api.urbandictionary.com/v0/define?term={quote_plus(term)}"
         try:
-            async with httpx.AsyncClient(timeout=8) as client:
-                resp = await client.get(url)
-                data = resp.json().get("list", [])
+            client = self._get_http_client()
+            resp = await client.get(url)
+            data = resp.json().get("list", [])
             if not data:
                 await ctx.send(f"❌ No definitions found for `{term}`.", delete_after=4)
                 return
@@ -603,26 +615,25 @@ class Tools(commands.Cog):
 
             # If not in cache, query Discord Guild Widget / Discovery API endpoint
             try:
-                token_val = getattr(self.bot.http, "token", "") or settings.discord_token
-                async with httpx.AsyncClient(timeout=8.0) as client:
-                    w_resp = await client.get(f"https://discord.com/api/v9/guilds/{guild_id}/widget.json")
-                    if w_resp.status_code == 200:
-                        w_data = w_resp.json()
-                        w_name = w_data.get("name", "Unknown")
-                        presence_count = len(w_data.get("members", []))
-                        instant_invite = w_data.get("instant_invite", "None")
-                        lines = [
-                            f"> `-` **Guild Widget OSINT**",
-                            f"> `—` **Name:** **{w_name}** (`{guild_id}`)",
-                            f"> `—` **Status:** Widget Enabled",
-                            f"> `—` **Active Online Tracked:** `{presence_count}`",
-                            f"> `—` **Instant Invite Discovered:** `{instant_invite}`",
-                        ]
-                        await ctx.send("\n".join(lines))
-                        return
-                    else:
-                        await ctx.send(f"> `!` **Guild OSINT:** Guild `{guild_id}` is not in bot cache and Widget API returned `{w_resp.status_code}` (Widget disabled or private).", delete_after=6)
-                        return
+                client = self._get_http_client()
+                w_resp = await client.get(f"https://discord.com/api/v9/guilds/{guild_id}/widget.json")
+                if w_resp.status_code == 200:
+                    w_data = w_resp.json()
+                    w_name = w_data.get("name", "Unknown")
+                    presence_count = len(w_data.get("members", []))
+                    instant_invite = w_data.get("instant_invite", "None")
+                    lines = [
+                        f"> `-` **Guild Widget OSINT**",
+                        f"> `—` **Name:** **{w_name}** (`{guild_id}`)",
+                        f"> `—` **Status:** Widget Enabled",
+                        f"> `—` **Active Online Tracked:** `{presence_count}`",
+                        f"> `—` **Instant Invite Discovered:** `{instant_invite}`",
+                    ]
+                    await ctx.send("\n".join(lines))
+                    return
+                else:
+                    await ctx.send(f"> `!` **Guild OSINT:** Guild `{guild_id}` is not in bot cache and Widget API returned `{w_resp.status_code}` (Widget disabled or private).", delete_after=6)
+                    return
             except Exception as e:
                 await ctx.send(f"> `!` **Guild OSINT Error:** `{e}`", delete_after=5)
                 return
@@ -630,20 +641,20 @@ class Tools(commands.Cog):
         # Case 2: Invite Code / Link Deep OSINT via Discord API with with_counts & with_expiration
         try:
             token_val = getattr(self.bot.http, "token", "") or settings.discord_token
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                headers = {"Authorization": token_val} if token_val else {}
-                resp = await client.get(
-                    f"https://discord.com/api/v9/invites/{code}?with_counts=true&with_expiration=true",
-                    headers=headers
-                )
-                if resp.status_code == 404:
-                    await ctx.send(f"> `!` **Invite OSINT:** Invite code `{code}` is invalid or expired.", delete_after=5)
-                    return
-                elif resp.status_code != 200:
-                    await ctx.send(f"> `!` **Invite OSINT:** Discord API error `{resp.status_code}`.", delete_after=5)
-                    return
-                
-                data = resp.json()
+            client = self._get_http_client()
+            headers = {"Authorization": token_val} if token_val else {}
+            resp = await client.get(
+                f"https://discord.com/api/v9/invites/{code}?with_counts=true&with_expiration=true",
+                headers=headers
+            )
+            if resp.status_code == 404:
+                await ctx.send(f"> `!` **Invite OSINT:** Invite code `{code}` is invalid or expired.", delete_after=5)
+                return
+            elif resp.status_code != 200:
+                await ctx.send(f"> `!` **Invite OSINT:** Discord API error `{resp.status_code}`.", delete_after=5)
+                return
+            
+            data = resp.json()
 
             guild = data.get("guild", {})
             channel = data.get("channel", {})
@@ -720,28 +731,29 @@ class Tools(commands.Cog):
 
         # 1. Nitro Sniper Listener
         if self._nitro_enabled and message.author.id != self.bot.user.id:
-            codes = GIFT_RE.findall(message.content)
-            for code in codes:
-                if code not in self._sniped_codes:
-                    self._sniped_codes.add(code)
-                    log_info(f"Nitro sniper: Detected code {code[:6]}… in #{message.channel}")
-                    t0 = time.monotonic()
-                    try:
-                        token_val = getattr(self.bot.http, "token", "") or settings.discord_token
-                        async with httpx.AsyncClient(timeout=8) as client:
+            if "discord.gift" in message.content or "discord.com/gift" in message.content:
+                codes = GIFT_RE.findall(message.content)
+                for code in codes:
+                    if code not in self._sniped_codes:
+                        self._sniped_codes.add(code)
+                        log_info(f"Nitro sniper: Detected code {code[:6]}… in #{message.channel}")
+                        t0 = time.monotonic()
+                        try:
+                            token_val = getattr(self.bot.http, "token", "") or settings.discord_token
+                            client = self._get_http_client()
                             resp = await client.post(
                                 REDEEM_URL.format(code=code),
                                 headers={"Authorization": token_val},
                                 json={"channel_id": str(message.channel.id)},
                             )
-                        ms = round((time.monotonic() - t0) * 1000)
-                        if resp.status_code == 200:
-                            log_info(f"Nitro sniped in {ms}ms! 🎉")
-                            await message.channel.send(f"🎉 Nitro sniped in `{ms}ms`!")
-                        elif resp.status_code == 429:
-                            log_warn(f"Nitro sniper rate-limited ({ms}ms)")
-                    except Exception as e:
-                        log_err(f"Nitro sniper request error: {e}")
+                            ms = round((time.monotonic() - t0) * 1000)
+                            if resp.status_code == 200:
+                                log_info(f"Nitro sniped in {ms}ms! 🎉")
+                                await message.channel.send(f"🎉 Nitro sniped in `{ms}ms`!")
+                            elif resp.status_code == 429:
+                                log_warn(f"Nitro sniper rate-limited ({ms}ms)")
+                        except Exception as e:
+                            log_err(f"Nitro sniper request error: {e}")
 
         # 2. Channel Auto-react & Auto-reply
         if message.author.id == self.bot.user.id:

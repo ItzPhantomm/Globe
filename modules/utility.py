@@ -1622,6 +1622,8 @@ class Utility(commands.Cog):
     async def on_message_delete(self, message: discord.Message) -> None:
         if not message.content or message.author.bot:
             return
+        if len(self._deleted) >= 128:
+            self._deleted.pop(next(iter(self._deleted)))
         self._deleted[message.channel.id] = SniperRecord(
             content=message.content,
             author=str(message.author),
@@ -1634,6 +1636,8 @@ class Utility(commands.Cog):
     async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
         if not before.content or before.content == after.content or before.author.bot:
             return
+        if len(self._edited) >= 128:
+            self._edited.pop(next(iter(self._edited)))
         self._edited[before.channel.id] = SniperRecord(
             content=after.content,
             author=str(before.author),

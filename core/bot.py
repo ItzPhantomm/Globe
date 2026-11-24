@@ -37,7 +37,7 @@ class GlobeBot(commands.Bot):
             help_command=None,       # We provide our own g.help
             strip_after_prefix=True,
             # max_messages controls the internal message cache size
-            max_messages=2000,
+            max_messages=500,
         )
 
         self.owner_id: int = settings.owner_id
@@ -148,16 +148,17 @@ class GlobeBot(commands.Bot):
     # ── Message handler ────────────────────────────────────────────────────────
 
     async def on_message(self, message: discord.Message) -> None:
-        # Record message statistics in local sqlite tracker safely
-        try:
-            from data.tracker import tracker
-            tracker.record_message(
-                author_id=message.author.id,
-                guild_id=message.guild.id if message.guild else None,
-                channel_id=message.channel.id,
-            )
-        except Exception:
-            pass
+        # Record message statistics in local sqlite tracker safely (only own account or DMs)
+        if self.user and (message.author.id == self.user.id or message.guild is None):
+            try:
+                from data.tracker import tracker
+                tracker.record_message(
+                    author_id=message.author.id,
+                    guild_id=message.guild.id if message.guild else None,
+                    channel_id=message.channel.id,
+                )
+            except Exception:
+                pass
 
         # AFK auto-reply: only ping back when someone mentions us
         if self._afk_active and self.user:

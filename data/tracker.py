@@ -22,6 +22,8 @@ class MessageTracker:
         self.db_path = db_path
         self._init_db()
         self._conn: sqlite3.Connection | None = None
+        self._buffer: list[tuple[int, int, int, str, float]] = []
+        self._last_flush: float = time.monotonic()
 
     def _get_connection(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -54,18 +56,32 @@ class MessageTracker:
                 "CREATE INDEX IF NOT EXISTS idx_messages_author_date ON messages(author_id, date)"
             )
 
-    def record_message(self, author_id: int, guild_id: int | None, channel_id: int) -> None:
-        today = datetime.utcnow().strftime("%Y-%m-%d")
-        now = time.time()
+    def flush(self) -> None:
+        """Flush pending buffered message records to SQLite in a single transaction."""
+        if not self._buffer:
+            return
+        to_write = list(self._buffer)
+        self._buffer.clear()
+        self._last_flush = time.monotonic()
         try:
             conn = self._get_connection()
-            conn.execute(
+            conn.executemany(
                 "INSERT INTO messages (author_id, guild_id, channel_id, date, timestamp) VALUES (?, ?, ?, ?, ?)",
-                (author_id, guild_id if guild_id else 0, channel_id, today, now),
+                to_write,
             )
             conn.commit()
         except Exception:
             pass
+
+    def record_message(self, author_id: int, guild_id: int | None, channel_id: int) -> None:
+        """Buffer message statistics and flush in micro-batches to prevent event-loop stalls."""
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        now = time.time()
+        self._buffer.append((author_id, guild_id if guild_id else 0, channel_id, today, now))
+
+        # Flush if buffer reaches 8 entries or >3 seconds elapsed since last flush
+        if len(self._buffer) >= 8 or (time.monotonic() - self._last_flush) > 3.0:
+            self.flush()
 
     def get_stats(self, author_id: int, guild_id: int | None = None) -> dict[str, int]:
         """
@@ -77,50 +93,51 @@ class MessageTracker:
         - dms_all: all-time messages sent in DMs
         - dms_today: today's messages in DMs
         """
+        self.flush()
         today = datetime.utcnow().strftime("%Y-%m-%d")
         target_guild = guild_id if guild_id else 0
 
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.cursor()
+        conn = self._get_connection()
+        cur = conn.cursor()
 
-            # Guild counts
-            cur.execute(
-                "SELECT COUNT(*) FROM messages WHERE author_id = ? AND guild_id = ?",
-                (author_id, target_guild),
-            )
-            guild_all = cur.fetchone()[0]
+        # Guild counts
+        cur.execute(
+            "SELECT COUNT(*) FROM messages WHERE author_id = ? AND guild_id = ?",
+            (author_id, target_guild),
+        )
+        guild_all = cur.fetchone()[0]
 
-            cur.execute(
-                "SELECT COUNT(*) FROM messages WHERE author_id = ? AND guild_id = ? AND date = ?",
-                (author_id, target_guild, today),
-            )
-            guild_today = cur.fetchone()[0]
+        cur.execute(
+            "SELECT COUNT(*) FROM messages WHERE author_id = ? AND guild_id = ? AND date = ?",
+            (author_id, target_guild, today),
+        )
+        guild_today = cur.fetchone()[0]
 
-            # Global counts
-            cur.execute(
-                "SELECT COUNT(*) FROM messages WHERE author_id = ?",
-                (author_id,),
-            )
-            global_all = cur.fetchone()[0]
+        # Global counts
+        cur.execute(
+            "SELECT COUNT(*) FROM messages WHERE author_id = ?",
+            (author_id,),
+        )
+        global_all = cur.fetchone()[0]
 
-            cur.execute(
-                "SELECT COUNT(*) FROM messages WHERE author_id = ? AND date = ?",
-                (author_id, today),
-            )
-            global_today = cur.fetchone()[0]
+        cur.execute(
+            "SELECT COUNT(*) FROM messages WHERE author_id = ? AND date = ?",
+            (author_id, today),
+        )
+        global_today = cur.fetchone()[0]
 
-            # DM counts (guild_id == 0)
-            cur.execute(
-                "SELECT COUNT(*) FROM messages WHERE author_id = ? AND guild_id = 0",
-                (author_id,),
-            )
-            dms_all = cur.fetchone()[0]
+        # DM counts (guild_id == 0)
+        cur.execute(
+            "SELECT COUNT(*) FROM messages WHERE author_id = ? AND guild_id = 0",
+            (author_id,),
+        )
+        dms_all = cur.fetchone()[0]
 
-            cur.execute(
-                "SELECT COUNT(*) FROM messages WHERE author_id = ? AND guild_id = 0 AND date = ?",
-                (author_id, today),
-            )
-            dms_today = cur.fetchone()[0]
+        cur.execute(
+            "SELECT COUNT(*) FROM messages WHERE author_id = ? AND guild_id = 0 AND date = ?",
+            (author_id, today),
+        )
+        dms_today = cur.fetchone()[0]
 
         return {
             "guild_all": guild_all,
