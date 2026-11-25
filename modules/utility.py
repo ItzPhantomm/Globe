@@ -1142,21 +1142,46 @@ class Utility(commands.Cog):
 
     @commands.command(name="afk")
     async def afk(self, ctx: commands.Context, *, reason: str = "") -> None:
-        """Activate AFK mode to automatically respond to mentions."""
+        """Activate Smart AFK mode (5m reply cooldown + missed-ping digest)."""
         await ctx.message.delete()
         self._afk_active = True
         self._afk_reason = reason
         self.bot._afk_active = True
+        self.bot._afk_reason = reason
+        self.bot._afk_cooldowns.clear()
+        self.bot._afk_pings.clear()
         tag = f" — *{reason}*" if reason else ""
         await ctx.send(f"💤 **AFK Enabled**{tag}", delete_after=5)
 
     @commands.command(name="unafk", aliases=["back"])
     async def unafk(self, ctx: commands.Context) -> None:
-        """Turn off AFK mode."""
+        """Turn off AFK mode and print a digest of missed pings."""
         await ctx.message.delete()
         self._afk_active = False
         self.bot._afk_active = False
-        await ctx.send("👋 **AFK Disabled.** Welcome back!", delete_after=4)
+        pings = list(getattr(self.bot, "_afk_pings", []))
+        self.bot._afk_pings.clear()
+        if not pings:
+            await ctx.send("👋 **AFK Disabled.** Welcome back — `0` missed pings.", delete_after=5)
+            return
+        lines = [f"> `-` **AFK Disabled — Missed Pings ({len(pings)})**"]
+        for p in pings[-8:][::-1]:
+            lines.append(f"> `—` **{p['author']}** in **{p['where']}** (<t:{p['ts']}:R>): `{p['content']}` [Jump]({p['jump']})")
+        lines.append("> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**")
+        await ctx.send("\n".join(lines), delete_after=25)
+
+    @commands.command(name="afkpings", aliases=["missedpings"])
+    async def afkpings(self, ctx: commands.Context) -> None:
+        """View pings received while AFK without disabling AFK."""
+        await ctx.message.delete()
+        pings = list(getattr(self.bot, "_afk_pings", []))
+        if not pings:
+            await ctx.send("> `-` **AFK Pings:** None recorded.", delete_after=5)
+            return
+        lines = [f"> `-` **AFK Missed Pings ({len(pings)})**"]
+        for p in pings[-8:][::-1]:
+            lines.append(f"> `—` **{p['author']}** in **{p['where']}**: `{p['content']}` [Jump]({p['jump']})")
+        await ctx.send("\n".join(lines), delete_after=20)
 
     # ── Media & Asset Utilities ───────────────────────────────────────────────
 
@@ -1644,6 +1669,159 @@ class Utility(commands.Cog):
             await status_msg.edit(content=f"> `!` **Export Error:** `{e}`")
             await status_msg.delete(delay=5)
 
+    @commands.command(name="deletedm", aliases=["wipedm", "cleandm", "nukedm"])
+    async def deletedm(self, ctx: commands.Context) -> None:
+        """
+        Wipe ALL messages sent by you in the current DM channel using adaptive rate-limit pacing.
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id) or not self.bot.user:
+            return
+        if ctx.guild is not None:
+            await ctx.send(f"> `!` `{settings.prefix}deletedm` only runs inside DMs/Group DMs.", delete_after=5)
+            return
+
+        status_msg = await ctx.send("> `-` **DM Wipe Initiated:** Scanning & clearing your messages…")
+        deleted_count = 0
+        scanned_count = 0
+        pace = 0.28
+
+        try:
+            async for msg in ctx.channel.history(limit=None):
+                scanned_count += 1
+                if msg.id == status_msg.id:
+                    continue
+                if msg.author.id != self.bot.user.id:
+                    continue
+                if msg.type not in (discord.MessageType.default, discord.MessageType.reply):
+                    continue
+
+                for attempt in range(3):
+                    try:
+                        await msg.delete()
+                        deleted_count += 1
+                        if deleted_count % 15 == 0:
+                            try:
+                                await status_msg.edit(
+                                    content=f"> `-` **DM Wipe Running:** `{deleted_count}` deleted (`{scanned_count}` scanned)…"
+                                )
+                            except Exception:
+                                pass
+                        await asyncio.sleep(pace + random.uniform(0.04, 0.14))
+                        break
+                    except discord.HTTPException as e:
+                        status_code = getattr(e, "status", None)
+                        if status_code == 429:
+                            retry_after = getattr(e, "retry_after", 2.0) or 2.0
+                            pace = min(pace + 0.05, 0.75)
+                            await asyncio.sleep(float(retry_after) + 0.35)
+                        elif status_code in (403, 404):
+                            break
+                        else:
+                            await asyncio.sleep(0.5)
+
+            await status_msg.edit(
+                content="\n".join([
+                    "> `-` **DM Wipe Complete**",
+                    f"> `—` **Own Messages Deleted:** `{deleted_count}`",
+                    f"> `—` **Messages Scanned:** `{scanned_count}`",
+                    "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+                ])
+            )
+            await status_msg.delete(delay=5)
+        except Exception as e:
+            await status_msg.edit(content=f"> `!` **DM Wipe Error:** `{e}`")
+            await status_msg.delete(delay=5)
+
+    @commands.command(name="snipesearch", aliases=["ssearch", "findsnipe"])
+    async def snipesearch(self, ctx: commands.Context, *, query: str) -> None:
+        """Search the last 500 persisted deleted messages by keyword or username."""
+        await ctx.message.delete()
+        from data.tracker import tracker
+
+        hits = tracker.search_snipes(query, limit=8)
+        if not hits:
+            await ctx.send(f"> `-` **Snipe Forensics:** No matches for `{query}`.", delete_after=5)
+            return
+        lines = [f"> `-` **Snipe Forensics (`{len(hits)}` matches for `{query}`)**"]
+        for h in hits:
+            lines.append(
+                f"> `—` **{h['author_name']}** (<t:{int(h['timestamp'])}:R>): `{h['content'][:120]}`"
+            )
+        lines.append("> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**")
+        await ctx.send("\n".join(lines), delete_after=25)
+
+    @commands.command(name="stealall", aliases=["cloneemojis", "stealemojis"])
+    async def stealall(self, ctx: commands.Context, source_guild_id: int, limit: int = 15) -> None:
+        """Clone custom emojis from another mutual server into the current server."""
+        await ctx.message.delete()
+        if not ctx.guild or not self.bot.is_owner_id(ctx.author.id):
+            return
+        src = self.bot.get_guild(source_guild_id)
+        if not src:
+            await ctx.send("> `!` **Source guild not found in cache.**", delete_after=5)
+            return
+
+        cap = max(1, min(limit, 30))
+        emojis = list(src.emojis)[:cap]
+        if not emojis:
+            await ctx.send("> `!` Source guild has no custom emojis.", delete_after=4)
+            return
+
+        status_msg = await ctx.send(f"> `-` **Cloning `{len(emojis)}` emojis from `{src.name}`…**")
+        added = 0
+        async with aiohttp.ClientSession() as session:
+            for em in emojis:
+                try:
+                    async with session.get(str(em.url)) as resp:
+                        if resp.status != 200:
+                            continue
+                        img_bytes = await resp.read()
+                    await ctx.guild.create_custom_emoji(name=em.name, image=img_bytes)
+                    added += 1
+                    await asyncio.sleep(1.2)
+                except Exception:
+                    pass
+        await status_msg.edit(content=f"> `-` **Cloned `{added}/{len(emojis)}` emojis** from **{src.name}**.")
+        await status_msg.delete(delay=8)
+
+    @commands.command(name="closedms", aliases=["cleardms", "dmclean"])
+    async def closedms(self, ctx: commands.Context, count: int = 20) -> None:
+        """Close up to N open 1-on-1 DM channels in your sidebar (preserves history)."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        cap = max(1, min(count, 100))
+        dm_channels = [ch for ch in self.bot.private_channels if isinstance(ch, discord.DMChannel)][:cap]
+        closed = 0
+        for ch in dm_channels:
+            if ch.id == ctx.channel.id:
+                continue
+            try:
+                await ch.close()
+                closed += 1
+                await asyncio.sleep(0.35)
+            except Exception:
+                pass
+        await ctx.send(f"> `-` **Closed `{closed}` DM channels** from sidebar.", delete_after=5)
+
+    @commands.command(name="ghostedit", aliases=["gedit", "trickedit"])
+    async def ghostedit(self, ctx: commands.Context, *, payload: str) -> None:
+        """Send an initial message and edit it after 1.2s: `g.ghostedit initial | final`."""
+        await ctx.message.delete()
+        if "|" not in payload:
+            await ctx.send(f"> `!` **Usage:** `{settings.prefix}ghostedit <initial> | <final>`", delete_after=5)
+            return
+        first, second = [part.strip() for part in payload.split("|", 1)]
+        if not first or not second:
+            return
+        m = await ctx.send(first[:1900])
+        await asyncio.sleep(1.2)
+        try:
+            await m.edit(content=second[:1900])
+        except Exception:
+            pass
+
     # ── Listeners ─────────────────────────────────────────────────────────────
 
     @commands.Cog.listener()
@@ -1669,6 +1847,17 @@ class Utility(commands.Cog):
                 attachments=att_urls,
             )
         )
+        try:
+            from data.tracker import tracker
+            tracker.record_snipe(
+                channel_id=message.channel.id,
+                author_id=message.author.id,
+                author_name=str(message.author),
+                content=content,
+                attachments=att_urls,
+            )
+        except Exception:
+            pass
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:

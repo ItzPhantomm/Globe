@@ -55,6 +55,22 @@ class MessageTracker:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_author_date ON messages(author_id, date)"
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS snipes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel_id INTEGER,
+                    author_id INTEGER,
+                    author_name TEXT,
+                    content TEXT,
+                    attachments TEXT,
+                    timestamp REAL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_snipes_ts ON snipes(timestamp DESC)"
+            )
 
     def flush(self) -> None:
         """Flush pending buffered message records to SQLite in a single transaction."""
@@ -147,6 +163,59 @@ class MessageTracker:
             "dms_all": dms_all,
             "dms_today": dms_today,
         }
+
+    def record_snipe(
+        self,
+        channel_id: int,
+        author_id: int,
+        author_name: str,
+        content: str,
+        attachments: list[str] | None = None,
+    ) -> None:
+        """Persist deleted message into SQLite and cap table at 500 newest rows."""
+        try:
+            conn = self._get_connection()
+            att_str = "\n".join(attachments) if attachments else ""
+            conn.execute(
+                "INSERT INTO snipes (channel_id, author_id, author_name, content, attachments, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                (channel_id, author_id, author_name, content[:1500], att_str, time.time()),
+            )
+            conn.execute(
+                "DELETE FROM snipes WHERE id NOT IN (SELECT id FROM snipes ORDER BY id DESC LIMIT 500)"
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+    def search_snipes(self, query: str, limit: int = 8) -> list[dict]:
+        """Search persisted deleted messages by keyword or author name."""
+        q = f"%{query.strip()}%"
+        try:
+            conn = self._get_connection()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT channel_id, author_id, author_name, content, attachments, timestamp
+                FROM snipes
+                WHERE content LIKE ? OR author_name LIKE ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (q, q, limit),
+            )
+            return [
+                {
+                    "channel_id": r[0],
+                    "author_id": r[1],
+                    "author_name": r[2],
+                    "content": r[3],
+                    "attachments": [u for u in r[4].split("\n") if u] if r[4] else [],
+                    "timestamp": r[5],
+                }
+                for r in cur.fetchall()
+            ]
+        except Exception:
+            return []
 
 
 tracker = MessageTracker()

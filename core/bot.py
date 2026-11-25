@@ -44,6 +44,9 @@ class GlobeBot(commands.Bot):
         self._start_time: float | None = None
         self._loaded_modules: list[str] = []
         self._afk_active: bool = False
+        self._afk_reason: str = ""
+        self._afk_cooldowns: dict[tuple[int, int], float] = {}
+        self._afk_pings: list[dict] = []
         # No-prefix state
         self._no_prefix_enabled: bool = False
         self._no_prefix_until: float | None = None  # None = indefinite or monotonic timestamp
@@ -173,17 +176,33 @@ class GlobeBot(commands.Bot):
             except Exception:
                 pass
 
-        # AFK auto-reply: only ping back when someone mentions us
-        if self._afk_active and self.user:
-            if (
-                message.guild
-                and message.author.id != self.user.id
-                and self.user in message.mentions
-            ):
-                try:
-                    await message.reply(f"💤 {settings.afk_message}", mention_author=False)
-                except Exception:
-                    pass
+        # AFK auto-reply + missed-ping digest (5m per-user/channel cooldown)
+        if self._afk_active and self.user and message.author.id != self.user.id:
+            is_dm = message.guild is None
+            is_mention = message.guild is not None and self.user in message.mentions
+            if is_dm or is_mention:
+                import time as _time
+                now_mono = _time.monotonic()
+                cd_key = (message.channel.id, message.author.id)
+                last_reply = self._afk_cooldowns.get(cd_key, 0.0)
+                where = f"{message.guild.name} #{getattr(message.channel, 'name', 'ch')}" if message.guild else "DM"
+                self._afk_pings.append({
+                    "author": str(message.author),
+                    "where": where,
+                    "content": (message.content or "[Attachment/Embed]")[:100],
+                    "jump": message.jump_url,
+                    "ts": int(_time.time()),
+                })
+                if len(self._afk_pings) > 50:
+                    self._afk_pings = self._afk_pings[-50:]
+
+                if now_mono - last_reply >= 300.0:
+                    self._afk_cooldowns[cd_key] = now_mono
+                    reason = self._afk_reason or settings.afk_message
+                    try:
+                        await message.reply(f"💤 **AFK:** {reason}", mention_author=False)
+                    except Exception:
+                        pass
 
         # No-prefix handling for selfbot account
         if (

@@ -97,6 +97,11 @@ class Tools(commands.Cog):
         self._gsniper_entered: set[int] = set()
         self._schedules: dict[int, dict[str, Any]] = {}
         self._schedule_seq: int = 0
+        self._alert_webhook: str | None = None
+        self._keywords: set[str] = set()
+        self._keyword_hits: deque[dict[str, Any]] = deque(maxlen=50)
+        self._vanity_task: asyncio.Task | None = None
+        self._vanity_target: str | None = None
 
     async def _resolve_input(self, ctx: commands.Context, text: str | None) -> str | None:
         """Return provided text or content of replied-to message."""
@@ -904,6 +909,173 @@ class Tools(commands.Cog):
         except ValueError:
             await ctx.send(f"> `!` Invalid schedule ID `{schedule_id}`.", delete_after=4)
 
+    # ── Alert Webhook, Global Keyword Notifier, Vanity Watcher & Activity Profiler
+
+    async def _forward_alert(self, title: str, body: str) -> None:
+        """Forward high-priority events (radar/stalk/keywords) to configured private webhook."""
+        if not self._alert_webhook:
+            return
+        try:
+            client = self._get_http_client()
+            await client.post(
+                self._alert_webhook,
+                json={"content": f"**[Globe Alert] {title}**\n{body[:1800]}"},
+            )
+        except Exception:
+            pass
+
+    @commands.command(name="alertwebhook", aliases=["logwebhook", "setalert"])
+    async def alertwebhook(self, ctx: commands.Context, webhook_url: str) -> None:
+        """Configure or disable (`off`) a private Discord webhook for radar/stalk/keyword alerts."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        if webhook_url.lower() in ("off", "clear", "none", "stop"):
+            self._alert_webhook = None
+            await ctx.send("> `-` **Alert Webhook Disabled.**", delete_after=4)
+            return
+        if not webhook_url.startswith("https://"):
+            await ctx.send("> `!` Provide a valid Discord webhook URL.", delete_after=4)
+            return
+        self._alert_webhook = webhook_url.strip()
+        await ctx.send("> `-` **Alert Webhook Armed:** Forwarding radar, stalk & keyword hits.", delete_after=5)
+
+    @commands.command(name="kw", aliases=["keyword", "keywords", "watchword"])
+    async def kw(self, ctx: commands.Context, action: str = "list", *, phrase: str = "") -> None:
+        """
+        Global keyword sniper across all servers.
+        Syntax: `g.kw add <phrase>`, `g.kw del <phrase>`, `g.kw list`, `g.kw clear`
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        act = action.lower()
+        if act == "add" and phrase.strip():
+            self._keywords.add(phrase.strip().lower())
+            await ctx.send(f"> `-` **Keyword Armed:** `{phrase.strip().lower()}`", delete_after=5)
+        elif act in ("del", "remove", "rm") and phrase.strip():
+            self._keywords.discard(phrase.strip().lower())
+            await ctx.send(f"> `-` **Keyword Removed:** `{phrase.strip().lower()}`", delete_after=5)
+        elif act == "clear":
+            self._keywords.clear()
+            await ctx.send("> `-` **All Keywords Cleared.**", delete_after=4)
+        else:
+            kw_list = ", ".join(f"`{k}`" for k in sorted(self._keywords)) or "*none*"
+            await ctx.send(f"> `-` **Watched Keywords ({len(self._keywords)}):** {kw_list}", delete_after=12)
+
+    @commands.command(name="kwlog", aliases=["keywordlog", "kwhits"])
+    async def kwlog(self, ctx: commands.Context) -> None:
+        """View recent global keyword hits."""
+        await ctx.message.delete()
+        if not self._keyword_hits:
+            await ctx.send("> `-` **Keyword Hits:** None recorded.", delete_after=5)
+            return
+        lines = [f"> `-` **Keyword Hits ({len(self._keyword_hits)})**"]
+        for h in list(self._keyword_hits)[-8:][::-1]:
+            lines.append(f"> `—` **{h['kw']}** by **{h['author']}** (<t:{h['ts']}:R>): `{h['content'][:100]}` [Jump]({h['jump']})")
+        await ctx.send("\n".join(lines), delete_after=20)
+
+    @commands.command(name="vanitywatch", aliases=["vanity", "snipervanity"])
+    async def vanitywatch(self, ctx: commands.Context, code_or_invite: str, target_guild_id: int | None = None, interval: float = 8.0) -> None:
+        """
+        Monitor a Discord vanity URL code and alert (or auto-claim on a Boost Lvl 3 guild) if it drops.
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        code = code_or_invite.rstrip("/").split("/")[-1].strip()
+        if not code:
+            return
+        delay = max(5.0, min(interval, 60.0))
+        if self._vanity_task and not self._vanity_task.done():
+            self._vanity_task.cancel()
+
+        self._vanity_target = code
+        ch = ctx.channel
+
+        async def _poll_vanity() -> None:
+            client = self._get_http_client()
+            token_val = getattr(self.bot.http, "token", "") or settings.discord_token
+            try:
+                while True:
+                    resp = await client.get(f"https://discord.com/api/v9/invites/{code}")
+                    if resp.status_code == 404:
+                        claim_note = "Alert only (no target guild set)."
+                        if target_guild_id and token_val:
+                            claim = await client.patch(
+                                f"https://discord.com/api/v9/guilds/{target_guild_id}/vanity-url",
+                                headers={"Authorization": token_val},
+                                json={"code": code},
+                            )
+                            claim_note = f"Auto-claim HTTP `{claim.status_code}`!"
+                        msg_txt = f"> `-` **VANITY DROPPED:** `discord.gg/{code}` returned `404`! ({claim_note})"
+                        try:
+                            await ch.send(msg_txt)
+                        except Exception:
+                            pass
+                        await self._forward_alert(f"Vanity `{code}` Dropped", claim_note)
+                        break
+                    await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                pass
+
+        self._vanity_task = asyncio.create_task(_poll_vanity())
+        await ctx.send(
+            f"> `-` **Vanity Watch Armed:** `discord.gg/{code}` every `{delay:.0f}s`.",
+            delete_after=6,
+        )
+
+    @commands.command(name="vanitystop", aliases=["stopvanity"])
+    async def vanitystop(self, ctx: commands.Context) -> None:
+        """Stop active vanity URL monitoring."""
+        await ctx.message.delete()
+        if self._vanity_task and not self._vanity_task.done():
+            self._vanity_task.cancel()
+            self._vanity_task = None
+            await ctx.send(f"> `-` **Vanity Watch Stopped** (`{self._vanity_target}`).", delete_after=4)
+        else:
+            await ctx.send("> `!` No vanity watch active.", delete_after=4)
+
+    @staticmethod
+    def _compute_activity_profile(timestamps: list[float]) -> tuple[str, int]:
+        """Return (peak_window_utc_str, peak_hour) from epoch timestamps."""
+        if not timestamps:
+            return "Unknown", 0
+        buckets = [0] * 24
+        for ts in timestamps:
+            hr = datetime.utcfromtimestamp(ts).hour
+            buckets[hr] += 1
+        peak_hr = max(range(24), key=lambda h: buckets[h])
+        end_hr = (peak_hr + 4) % 24
+        return f"{peak_hr:02d}:00–{end_hr:02d}:00 UTC", peak_hr
+
+    @commands.command(name="activity", aliases=["tzprofile", "activehours", "sleepcheck"])
+    async def activity_cmd(self, ctx: commands.Context, target: discord.User, depth: int = 300) -> None:
+        """Estimate a user's peak active hours (UTC) & likely timezone from channel history."""
+        await ctx.message.delete()
+        scan_depth = max(50, min(depth, 500))
+        timestamps: list[float] = []
+        async for m in ctx.channel.history(limit=scan_depth):
+            if m.author.id == target.id and m.created_at:
+                timestamps.append(m.created_at.timestamp())
+
+        if not timestamps:
+            await ctx.send(f"> `!` No messages from **{target}** in the last `{scan_depth}` messages here.", delete_after=5)
+            return
+
+        peak_window, peak_hr = self._compute_activity_profile(timestamps)
+        # Heuristic: typical afternoon/evening peak is ~18:00 local time
+        est_offset = ((18 - peak_hr + 12) % 24) - 12
+        sign = "+" if est_offset >= 0 else ""
+        lines = [
+            f"> `-` **Activity & Timezone Profiler:** **{target}**",
+            f"> `—` **Sample Size:** `{len(timestamps)}` msgs (scanned `{scan_depth}`)",
+            f"> `—` **Peak Active Window:** `{peak_window}`",
+            f"> `•` **Estimated Timezone:** `UTC{sign}{est_offset}` *(heuristic)*",
+            "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]
+        await ctx.send("\n".join(lines), delete_after=20)
+
     # ── Advanced OSINT Link & Invite / Guild Intelligence ────────────────────
 
     @commands.command(name="linkinfo", aliases=["link", "linkosint", "urlinfo"])
@@ -1201,6 +1373,24 @@ class Tools(commands.Cog):
                         log_info(f"Giveaway sniper entered {message.id} in #{message.channel}")
                     except Exception:
                         pass
+
+        # 1c. Global Keyword Notifier
+        if self._keywords and message.author.id != self.bot.user.id and not message.author.bot and message.content:
+            low = message.content.lower()
+            for kw in self._keywords:
+                if kw in low:
+                    self._keyword_hits.append({
+                        "kw": kw,
+                        "author": str(message.author),
+                        "content": message.content[:140],
+                        "jump": message.jump_url,
+                        "ts": int(time.time()),
+                    })
+                    asyncio.create_task(self._forward_alert(
+                        f"Keyword `{kw}`",
+                        f"**{message.author}**: {message.content[:300]}\n{message.jump_url}",
+                    ))
+                    break
 
         # 2. Channel Auto-react & Auto-reply
         if message.author.id == self.bot.user.id:
