@@ -1090,17 +1090,34 @@ class Tools(commands.Cog):
         return f"{peak_hr:02d}:00–{end_hr:02d}:00 UTC", peak_hr
 
     @commands.command(name="activity", aliases=["tzprofile", "activehours", "sleepcheck"])
-    async def activity_cmd(self, ctx: commands.Context, target: discord.User, depth: int = 300) -> None:
-        """Estimate a user's peak active hours (UTC) & likely timezone from channel history."""
+    async def activity_cmd(self, ctx: commands.Context, target: discord.User, count: int = 1000) -> None:
+        """Gather up to N messages (default 1000) by a user in this channel to profile active hours & timezone."""
         await ctx.message.delete()
-        scan_depth = max(50, min(depth, 500))
+        target_goal = max(10, min(count, 1000))
+        max_scan = 10000
+        status_msg = await ctx.send(f"> `-` **Profiling {target}:** Gathering up to `{target_goal}` messages…")
+
         timestamps: list[float] = []
-        async for m in ctx.channel.history(limit=scan_depth):
+        scanned = 0
+        async for m in ctx.channel.history(limit=max_scan):
+            if m.id == status_msg.id:
+                continue
+            scanned += 1
             if m.author.id == target.id and m.created_at:
                 timestamps.append(m.created_at.timestamp())
+                if len(timestamps) >= target_goal:
+                    break
+            if scanned % 1000 == 0:
+                try:
+                    await status_msg.edit(
+                        content=f"> `-` **Profiling {target}:** `{len(timestamps)}/{target_goal}` collected (`{scanned}` scanned)…"
+                    )
+                except Exception:
+                    pass
 
         if not timestamps:
-            await ctx.send(f"> `!` No messages from **{target}** in the last `{scan_depth}` messages here.", delete_after=5)
+            await status_msg.edit(content=f"> `!` No messages from **{target}** in the last `{scanned}` messages here.")
+            await status_msg.delete(delay=5)
             return
 
         peak_window, peak_hr = self._compute_activity_profile(timestamps)
@@ -1109,12 +1126,13 @@ class Tools(commands.Cog):
         sign = "+" if est_offset >= 0 else ""
         lines = [
             f"> `-` **Activity & Timezone Profiler:** **{target}**",
-            f"> `—` **Sample Size:** `{len(timestamps)}` msgs (scanned `{scan_depth}`)",
+            f"> `—` **User Messages Collected:** `{len(timestamps)}` (scanned `{scanned}` total)",
             f"> `—` **Peak Active Window:** `{peak_window}`",
             f"> `•` **Estimated Timezone:** `UTC{sign}{est_offset}` *(heuristic)*",
             "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
         ]
-        await ctx.send("\n".join(lines), delete_after=20)
+        await status_msg.edit(content="\n".join(lines))
+        await status_msg.delete(delay=25)
 
     # ── Friend Request Hygiene, Webhook Inspector & QR Generator ──────────────
 
