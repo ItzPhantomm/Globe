@@ -1089,50 +1089,175 @@ class Tools(commands.Cog):
         end_hr = (peak_hr + 4) % 24
         return f"{peak_hr:02d}:00–{end_hr:02d}:00 UTC", peak_hr
 
+    @staticmethod
+    def _compute_sleep_window(timestamps: list[float]) -> str:
+        """Find the 6-hour consecutive UTC window with the fewest messages."""
+        if not timestamps:
+            return "Unknown"
+        buckets = [0] * 24
+        for ts in timestamps:
+            buckets[datetime.utcfromtimestamp(ts).hour] += 1
+        best_start = min(
+            range(24),
+            key=lambda h: sum(buckets[(h + offset) % 24] for offset in range(6)),
+        )
+        return f"{best_start:02d}:00–{(best_start + 6) % 24:02d}:00 UTC"
+
     @commands.command(name="activity", aliases=["tzprofile", "activehours", "sleepcheck"])
     async def activity_cmd(self, ctx: commands.Context, target: discord.User, count: int = 1000) -> None:
-        """Gather up to N messages (default 1000) by a user in this channel to profile active hours & timezone."""
+        """
+        Deep cross-server behavioral & activity profiler for a user (gathers up to 1000 messages,
+        live client platforms, voice state, custom/rich activities, sleep window, and message style).
+        """
         await ctx.message.delete()
         target_goal = max(10, min(count, 1000))
-        max_scan = 10000
-        status_msg = await ctx.send(f"> `-` **Profiling {target}:** Gathering up to `{target_goal}` messages…")
+        status_msg = await ctx.send(f"> `-` **Deep Profiling {target}:** Scanning current channel & mutual servers…")
 
-        timestamps: list[float] = []
-        scanned = 0
-        async for m in ctx.channel.history(limit=max_scan):
-            if m.id == status_msg.id:
+        # 1. Live Presence, Platforms, Activities, Mutuals & Voice State across all mutual guilds
+        mutual_guilds: list[discord.Guild] = []
+        platforms: set[str] = set()
+        live_status = "offline"
+        activities_desc: list[str] = []
+        voice_desc: str | None = None
+
+        for guild in self.bot.guilds:
+            m = guild.get_member(target.id)
+            if not m:
                 continue
-            scanned += 1
-            if m.author.id == target.id and m.created_at:
-                timestamps.append(m.created_at.timestamp())
-                if len(timestamps) >= target_goal:
+            mutual_guilds.append(guild)
+            if str(m.status) != "offline":
+                live_status = str(m.status)
+            if str(getattr(m, "desktop_status", "offline")) != "offline":
+                platforms.add("Desktop")
+            if str(getattr(m, "mobile_status", "offline")) != "offline":
+                platforms.add("Mobile")
+            if str(getattr(m, "web_status", "offline")) != "offline":
+                platforms.add("Web")
+            for act in getattr(m, "activities", []) or []:
+                act_name = getattr(act, "state", None) or getattr(act, "name", None)
+                if act_name and act_name not in activities_desc:
+                    activities_desc.append(str(act_name)[:45])
+            if m.voice and m.voice.channel and not voice_desc:
+                flags = []
+                if m.voice.self_mute or m.voice.mute:
+                    flags.append("muted")
+                if m.voice.self_deaf or m.voice.deaf:
+                    flags.append("deaf")
+                if getattr(m.voice, "self_stream", False):
+                    flags.append("streaming")
+                if getattr(m.voice, "self_video", False):
+                    flags.append("cam")
+                flag_str = f" ({', '.join(flags)})" if flags else ""
+                voice_desc = f"**{guild.name}** → `#{m.voice.channel.name}`{flag_str}"
+
+        # 2. Build ordered list of readable channels: current channel, DM if open, then mutual guild channels
+        channels_to_scan: list[tuple[str, discord.abc.Messageable]] = []
+        seen_ids: set[int] = set()
+
+        cur_label = f"{ctx.guild.name} #{ctx.channel.name}" if ctx.guild else "Current DM"
+        channels_to_scan.append((cur_label, ctx.channel))
+        seen_ids.add(ctx.channel.id)
+
+        for priv in getattr(self.bot, "private_channels", []):
+            if isinstance(priv, discord.DMChannel) and priv.recipient and priv.recipient.id == target.id and priv.id not in seen_ids:
+                channels_to_scan.append(("Direct Message", priv))
+                seen_ids.add(priv.id)
+
+        for g in mutual_guilds:
+            me = g.me or (g.get_member(self.bot.user.id) if self.bot.user else None)
+            for ch in g.text_channels:
+                if ch.id in seen_ids:
+                    continue
+                if me and not ch.permissions_for(me).read_message_history:
+                    continue
+                channels_to_scan.append((f"{g.name} #{ch.name}", ch))
+                seen_ids.add(ch.id)
+                if len(channels_to_scan) >= 28:
                     break
-            if scanned % 1000 == 0:
-                try:
-                    await status_msg.edit(
-                        content=f"> `-` **Profiling {target}:** `{len(timestamps)}/{target_goal}` collected (`{scanned}` scanned)…"
-                    )
-                except Exception:
-                    pass
+            if len(channels_to_scan) >= 28:
+                break
 
-        if not timestamps:
-            await status_msg.edit(content=f"> `!` No messages from **{target}** in the last `{scanned}` messages here.")
-            await status_msg.delete(delay=5)
-            return
+        # 3. Collect up to target_goal messages across channels
+        timestamps: list[float] = []
+        total_chars = 0
+        replies = 0
+        media_or_links = 0
+        weekend_msgs = 0
+        where_counts: dict[str, int] = {}
+        scanned = 0
 
-        peak_window, peak_hr = self._compute_activity_profile(timestamps)
-        # Heuristic: typical afternoon/evening peak is ~18:00 local time
-        est_offset = ((18 - peak_hr + 12) % 24) - 12
-        sign = "+" if est_offset >= 0 else ""
+        for idx, (label, ch) in enumerate(channels_to_scan):
+            if len(timestamps) >= target_goal:
+                break
+            per_ch_limit = 4000 if idx == 0 else 250
+            try:
+                async for m in ch.history(limit=per_ch_limit):
+                    if m.id == status_msg.id:
+                        continue
+                    scanned += 1
+                    if m.author.id == target.id and m.created_at:
+                        ts = m.created_at.timestamp()
+                        timestamps.append(ts)
+                        total_chars += len(m.content or "")
+                        if m.reference:
+                            replies += 1
+                        if m.attachments or "http://" in (m.content or "") or "https://" in (m.content or ""):
+                            media_or_links += 1
+                        if m.created_at.weekday() >= 5:
+                            weekend_msgs += 1
+                        where_counts[label] = where_counts.get(label, 0) + 1
+                        if len(timestamps) >= target_goal:
+                            break
+                    if scanned % 1000 == 0:
+                        try:
+                            await status_msg.edit(
+                                content=f"> `-` **Deep Profiling {target}:** `{len(timestamps)}/{target_goal}` msgs across `{idx + 1}` channels (`{scanned}` scanned)…"
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                continue
+
+        # 4. Compute behavioral metrics & compile report
+        stalk_hits = sum(1 for e in self._stalk_logs if e.get("uid") == target.id)
+        plat_str = ", ".join(sorted(platforms)) if platforms else "Offline / Hidden"
+        act_str = " · ".join(activities_desc[:2]) if activities_desc else "None"
+
         lines = [
-            f"> `-` **Activity & Timezone Profiler:** **{target}**",
-            f"> `—` **User Messages Collected:** `{len(timestamps)}` (scanned `{scanned}` total)",
-            f"> `—` **Peak Active Window:** `{peak_window}`",
-            f"> `•` **Estimated Timezone:** `UTC{sign}{est_offset}` *(heuristic)*",
-            "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+            f"> `-` **Deep Behavioral Profiler:** **{target}** (`{target.id}`)",
+            f"> `—` **Live Presence:** `{live_status}` · **Platforms:** `{plat_str}`",
+            f"> `—` **Activity / Status:** `{act_str}`",
+            f"> `—` **Mutual Servers:** `{len(mutual_guilds)}` · **Live Voice:** {voice_desc or '`Not in VC`'}",
         ]
+
+        if timestamps:
+            peak_window, peak_hr = self._compute_activity_profile(timestamps)
+            sleep_window = self._compute_sleep_window(timestamps)
+            est_offset = ((18 - peak_hr + 12) % 24) - 12
+            sign = "+" if est_offset >= 0 else ""
+            n = len(timestamps)
+            avg_len = total_chars / n
+            reply_pct = (replies / n) * 100
+            media_pct = (media_or_links / n) * 100
+            wknd_pct = (weekend_msgs / n) * 100
+            top_places = ", ".join(
+                f"`{k}` ({v})" for k, v in sorted(where_counts.items(), key=lambda kv: kv[1], reverse=True)[:3]
+            )
+            lines.extend([
+                f"> `•` **Sample:** `{n}` msgs across `{len(where_counts)}` channels (`{scanned}` scanned)",
+                f"> `•` **Peak Active:** `{peak_window}` · **Quiet/Sleep:** `{sleep_window}` · **Est. TZ:** `UTC{sign}{est_offset}`",
+                f"> `•` **Style:** `avg {avg_len:.0f} chars` · `{reply_pct:.0f}% replies` · `{media_pct:.0f}% media/links` · `{wknd_pct:.0f}% weekend`",
+                f"> `•` **Top Spots:** {top_places}",
+            ])
+        else:
+            lines.append(f"> `•` **Messages:** `0` found across `{scanned}` scanned messages in `{len(channels_to_scan)}` channels.")
+
+        if stalk_hits:
+            lines.append(f"> `•` **Stalker Events Logged:** `{stalk_hits}` (run `{settings.prefix}stalklog`)")
+        lines.append("> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**")
+
         await status_msg.edit(content="\n".join(lines))
-        await status_msg.delete(delay=25)
+        await status_msg.delete(delay=30)
 
     # ── Friend Request Hygiene, Webhook Inspector & QR Generator ──────────────
 
