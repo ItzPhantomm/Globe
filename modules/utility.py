@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import os
 import platform
 import random
 import re
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -27,7 +28,6 @@ from config import settings
 from footprint_handlers import footprint
 from ui import log_info, log_warn, log_err
 
-P = settings.prefix
 ENV_PATH = Path(".env")
 CUSTOM_EMOJI_RE = re.compile(r"<(a)?:([a-zA-Z0-9_]+):([0-9]+)>")
 
@@ -40,6 +40,7 @@ class SniperRecord:
     avatar: str
     timestamp: datetime = field(default_factory=datetime.utcnow)
     before: str | None = None
+    attachments: list[str] = field(default_factory=list)
 
 
 def _fmt_uptime(seconds: float) -> str:
@@ -79,8 +80,8 @@ class Utility(commands.Cog):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self._deleted: dict[int, SniperRecord] = defaultdict(lambda: None)
-        self._edited: dict[int, SniperRecord] = defaultdict(lambda: None)
+        self._deleted: dict[int, deque[SniperRecord]] = defaultdict(lambda: deque(maxlen=10))
+        self._edited: dict[int, deque[SniperRecord]] = defaultdict(lambda: deque(maxlen=10))
         self._afk_active: bool = False
         self._afk_reason: str = ""
 
@@ -867,19 +868,6 @@ class Utility(commands.Cog):
         except Exception:
             await ctx.send("❌ Could not fetch message.", delete_after=4)
 
-    @commands.command(name="firstmessage", aliases=["firstmsg", "fmsg"])
-    async def firstmessage(self, ctx: commands.Context, channel: discord.TextChannel | None = None) -> None:
-        """Get the link to the very first message sent in a channel."""
-        await ctx.message.delete()
-        ch = channel or ctx.channel
-        try:
-            async for m in ch.history(limit=1, oldest_first=True):
-                await ctx.send(f"📌 **First message in {ch.mention}:** {m.jump_url}")
-                return
-            await ctx.send("❌ Channel contains no messages.", delete_after=4)
-        except Exception as e:
-            await ctx.send(f"❌ Failed to fetch first message: {e}", delete_after=4)
-
     # ── Advanced Information Lookups ───────────────────────────────────────────
 
     @commands.command(name="userinfo", aliases=["ui", "whois", "user"])
@@ -1097,13 +1085,6 @@ class Utility(commands.Cog):
         except Exception as e:
             await ctx.send(f"❌ Failed to fetch invites: {e}", delete_after=5)
 
-    @commands.command(name="avatar", aliases=["av", "pfp", "icon"])
-    async def avatar(self, ctx: commands.Context, *, user: discord.User | None = None) -> None:
-        """Fetch high-resolution avatar URL for a user."""
-        await ctx.message.delete()
-        target = user or ctx.author
-        await ctx.send(f"🖼️ **{target}'s Avatar:**\n{target.display_avatar.url}")
-
     @commands.command(name="id")
     async def id_cmd(self, ctx: commands.Context, *, target: discord.User | discord.Role | discord.TextChannel | None = None) -> None:
         """Grab the snowflake ID of a user, channel, role, or yourself."""
@@ -1114,31 +1095,38 @@ class Utility(commands.Cog):
     # ── Snipe Cache ───────────────────────────────────────────────────────────
 
     @commands.command(name="snipe", aliases=["sn", "deleted"])
-    async def snipe(self, ctx: commands.Context) -> None:
-        """Retrieve the last deleted message in this channel."""
+    async def snipe(self, ctx: commands.Context, index: int = 1) -> None:
+        """Retrieve deleted messages/images in this channel (index 1-10, default: 1)."""
         await ctx.message.delete()
-        rec = self._deleted.get(ctx.channel.id)
-        if not rec:
+        history = self._deleted.get(ctx.channel.id)
+        if not history:
             await ctx.send("❌ No deleted messages cached in this channel.", delete_after=4)
             return
+        idx = max(1, min(index, len(history)))
+        rec = history[-idx]
         lines = [
-            f"👻 **Sniped Message from __{rec.author}__** (`{rec.timestamp.strftime('%H:%M:%S UTC')}`):",
-            f">>> {rec.content}",
+            f"> `-` **Sniped Message #{idx}/{len(history)}** · **{rec.author}** (`{rec.timestamp.strftime('%H:%M:%S UTC')}`)",
         ]
+        if rec.content:
+            lines.append(f"> `—` {rec.content[:1500]}")
+        for att_url in rec.attachments[:4]:
+            lines.append(f"> `•` **Attachment:** {att_url}")
         await ctx.send("\n".join(lines))
 
     @commands.command(name="esnipe", aliases=["editsnipe", "es"])
-    async def esnipe(self, ctx: commands.Context) -> None:
-        """Retrieve the last edited message in this channel."""
+    async def esnipe(self, ctx: commands.Context, index: int = 1) -> None:
+        """Retrieve edited messages in this channel (index 1-10, default: 1)."""
         await ctx.message.delete()
-        rec = self._edited.get(ctx.channel.id)
-        if not rec:
+        history = self._edited.get(ctx.channel.id)
+        if not history:
             await ctx.send("❌ No edited messages cached in this channel.", delete_after=4)
             return
+        idx = max(1, min(index, len(history)))
+        rec = history[-idx]
         lines = [
-            f"✏️ **Edit-Sniped from __{rec.author}__**:",
-            f"**Before:** {rec.before}",
-            f"**After:** {rec.content}",
+            f"> `-` **Edit-Sniped #{idx}/{len(history)}** · **{rec.author}**",
+            f"> `—` **Before:** {rec.before[:900] if rec.before else '—'}",
+            f"> `•` **After:** {rec.content[:900] if rec.content else '—'}",
         ]
         await ctx.send("\n".join(lines))
 
@@ -1397,13 +1385,14 @@ class Utility(commands.Cog):
             ]
             await ctx.send("\n".join(lines))
 
-    @commands.command(name="firstmessage", aliases=["firstmsg", "fm"])
-    async def firstmessage(self, ctx: commands.Context) -> None:
-        """Fetch the first message ever recorded in the current channel."""
+    @commands.command(name="firstmessage", aliases=["firstmsg", "fm", "fmsg"])
+    async def firstmessage(self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None) -> None:
+        """Fetch the first message ever recorded in the specified or current channel."""
         await ctx.message.delete()
+        target_ch = channel or ctx.channel
         try:
             # Snowflake query right after channel inception boundary
-            async for first in ctx.channel.history(limit=1, oldest_first=True):
+            async for first in target_ch.history(limit=1, oldest_first=True):
                 jump_url = first.jump_url
                 author = first.author
                 ts = int(first.created_at.timestamp()) if first.created_at else 0
@@ -1616,35 +1605,86 @@ class Utility(commands.Cog):
             await status_msg.edit(content=f"> `!` **Self-Purge Error:** `{e}`")
             await status_msg.delete(delay=5)
 
+    @commands.command(name="exportchat", aliases=["exportdm", "chatexport", "transcript"])
+    async def exportchat(self, ctx: commands.Context, limit: int = 200) -> None:
+        """
+        Export channel or DM message history into a clean Markdown transcript file.
+        Syntax: `g.exportchat [limit]` (max: 1000, default: 200)
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        target_limit = max(1, min(limit, 1000))
+        ch_name = getattr(ctx.channel, "name", None) or f"dm-{getattr(ctx.channel, 'recipient', ctx.channel.id)}"
+        status_msg = await ctx.send(f"> `-` **Exporting up to `{target_limit}` messages from `{ch_name}`…**")
+
+        try:
+            records: list[str] = []
+            async for msg in ctx.channel.history(limit=target_limit, oldest_first=False):
+                ts = msg.created_at.strftime("%Y-%m-%d %H:%M:%S") if msg.created_at else "unknown"
+                body = msg.content or ""
+                if msg.attachments:
+                    att_str = " ".join(a.url for a in msg.attachments)
+                    body = f"{body} [Attachments: {att_str}]".strip()
+                if not body and msg.embeds:
+                    body = "[Embed]"
+                records.append(f"[{ts}] {msg.author} ({msg.author.id}): {body}")
+
+            records.reverse()
+            header = f"# Globe Chat Transcript — {ch_name}\n# Exported: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n# Messages: {len(records)}\n\n"
+            payload = (header + "\n".join(records)).encode("utf-8")
+            file_obj = discord.File(io.BytesIO(payload), filename=f"transcript_{ctx.channel.id}.txt")
+            await status_msg.delete()
+            await ctx.send(
+                f"> `-` **Transcript Exported:** `{len(records)}` messages from **{ch_name}**",
+                file=file_obj,
+            )
+        except Exception as e:
+            await status_msg.edit(content=f"> `!` **Export Error:** `{e}`")
+            await status_msg.delete(delay=5)
+
     # ── Listeners ─────────────────────────────────────────────────────────────
 
     @commands.Cog.listener()
     async def on_message_delete(self, message: discord.Message) -> None:
-        if not message.content or message.author.bot:
+        if message.author.bot:
             return
-        if len(self._deleted) >= 128:
+        att_urls = [a.proxy_url or a.url for a in message.attachments] if message.attachments else []
+        content = message.content or ""
+        if not content and message.embeds:
+            emb = message.embeds[0]
+            content = f"[Embed: {emb.title or emb.description or 'Rich Embed'}]"
+        if not content and not att_urls:
+            return
+        if message.channel.id not in self._deleted and len(self._deleted) >= 128:
             self._deleted.pop(next(iter(self._deleted)))
-        self._deleted[message.channel.id] = SniperRecord(
-            content=message.content,
-            author=str(message.author),
-            author_id=message.author.id,
-            avatar=str(message.author.display_avatar.url),
-            timestamp=message.created_at.replace(tzinfo=None) if message.created_at else datetime.utcnow(),
+        self._deleted[message.channel.id].append(
+            SniperRecord(
+                content=content,
+                author=str(message.author),
+                author_id=message.author.id,
+                avatar=str(message.author.display_avatar.url),
+                timestamp=message.created_at.replace(tzinfo=None) if message.created_at else datetime.utcnow(),
+                attachments=att_urls,
+            )
         )
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
         if not before.content or before.content == after.content or before.author.bot:
             return
-        if len(self._edited) >= 128:
+        if before.channel.id not in self._edited and len(self._edited) >= 128:
             self._edited.pop(next(iter(self._edited)))
-        self._edited[before.channel.id] = SniperRecord(
-            content=after.content,
-            author=str(before.author),
-            author_id=before.author.id,
-            avatar=str(before.author.display_avatar.url),
-            timestamp=before.created_at.replace(tzinfo=None) if before.created_at else datetime.utcnow(),
-            before=before.content,
+        self._edited[before.channel.id].append(
+            SniperRecord(
+                content=after.content,
+                author=str(before.author),
+                author_id=before.author.id,
+                avatar=str(before.author.display_avatar.url),
+                timestamp=before.created_at.replace(tzinfo=None) if before.created_at else datetime.utcnow(),
+                before=before.content,
+            )
         )
 
 

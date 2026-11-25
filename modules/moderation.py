@@ -7,7 +7,9 @@ Includes complete Role Manager and Webhook Manager suites.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import timedelta
+from pathlib import Path
 from typing import Optional
 
 import aiohttp
@@ -443,6 +445,186 @@ class Moderation(commands.Cog):
                         await ctx.send(f"❌ Webhook returned error code {resp.status}.", delete_after=5)
         except Exception as e:
             await ctx.send(f"❌ Failed to post to webhook: {e}", delete_after=5)
+
+    # ── Server Backup & Cloner ────────────────────────────────────────────────
+
+    @commands.command(name="backupserver", aliases=["serverbackup", "guildbackup"])
+    async def backupserver(self, ctx: commands.Context, guild_id: Optional[int] = None) -> None:
+        """
+        Snapshot roles, categories, and channels of a server into JSON (`data/backups/`).
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        guild = self.bot.get_guild(guild_id) if guild_id else ctx.guild
+        if not guild:
+            await ctx.send("> `!` **Guild not found** in cache.", delete_after=5)
+            return
+
+        snapshot = {
+            "id": guild.id,
+            "name": guild.name,
+            "roles": [
+                {
+                    "name": r.name,
+                    "color": r.color.value,
+                    "permissions": r.permissions.value,
+                    "hoist": r.hoist,
+                    "mentionable": r.mentionable,
+                }
+                for r in sorted(guild.roles, key=lambda x: x.position)
+                if not r.is_default() and not r.managed
+            ],
+            "categories": [
+                {
+                    "name": cat.name,
+                    "position": cat.position,
+                    "channels": [
+                        {
+                            "name": ch.name,
+                            "type": "text" if isinstance(ch, discord.TextChannel) else "voice",
+                            "topic": getattr(ch, "topic", None),
+                            "slowmode": getattr(ch, "slowmode_delay", 0),
+                            "nsfw": getattr(ch, "nsfw", False),
+                            "bitrate": getattr(ch, "bitrate", 64000),
+                            "user_limit": getattr(ch, "user_limit", 0),
+                        }
+                        for ch in sorted(cat.channels, key=lambda c: c.position)
+                        if isinstance(ch, (discord.TextChannel, discord.VoiceChannel))
+                    ],
+                }
+                for cat in sorted(guild.categories, key=lambda c: c.position)
+            ],
+            "uncategorized": [
+                {
+                    "name": ch.name,
+                    "type": "text" if isinstance(ch, discord.TextChannel) else "voice",
+                    "topic": getattr(ch, "topic", None),
+                    "slowmode": getattr(ch, "slowmode_delay", 0),
+                    "nsfw": getattr(ch, "nsfw", False),
+                }
+                for ch in sorted(guild.channels, key=lambda c: c.position)
+                if ch.category is None and isinstance(ch, (discord.TextChannel, discord.VoiceChannel))
+            ],
+        }
+
+        out_dir = Path("data") / "backups"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / f"{guild.id}.json"
+        out_file.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+
+        lines = [
+            "> `-` **Server Snapshot Saved**",
+            f"> `—` **Guild:** **{guild.name}** (`{guild.id}`)",
+            f"> `—` **Captured:** `{len(snapshot['roles'])}` roles · `{len(snapshot['categories'])}` categories",
+            f"> `•` **File:** `{out_file}`",
+        ]
+        await ctx.send("\n".join(lines), file=discord.File(out_file), delete_after=20)
+
+    @commands.command(name="cloneserver", aliases=["cloneguild", "copyserver"])
+    async def cloneserver(self, ctx: commands.Context, source_id: int, target_id: Optional[int] = None) -> None:
+        """
+        Clone roles, categories, and channels from a source server into a target server you own/admin.
+        Syntax: `g.cloneserver <source_guild_id> [target_guild_id]`
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        src = self.bot.get_guild(source_id)
+        dst = self.bot.get_guild(target_id) if target_id else ctx.guild
+        if not src or not dst:
+            await ctx.send("> `!` **Source or target guild not found.**", delete_after=5)
+            return
+        if src.id == dst.id:
+            await ctx.send("> `!` Source and target guilds cannot be the same.", delete_after=5)
+            return
+
+        me = dst.get_member(ctx.author.id)
+        if not me or not me.guild_permissions.administrator:
+            await ctx.send("> `!` **Administrator** permission required in target guild.", delete_after=5)
+            return
+
+        status = await ctx.send(f"> `-` **Cloning `{src.name}` → `{dst.name}`…** *(pacing enabled)*")
+
+        try:
+            # 1. Wipe existing non-managed channels on target
+            for ch in list(dst.channels):
+                try:
+                    await ch.delete(reason="Globe cloner reset")
+                    await asyncio.sleep(0.35)
+                except Exception:
+                    pass
+
+            # 2. Recreate roles (top-down order preserved on create)
+            roles_created = 0
+            for r in reversed(sorted(src.roles, key=lambda x: x.position)):
+                if r.is_default() or r.managed:
+                    continue
+                try:
+                    await dst.create_role(
+                        name=r.name,
+                        permissions=r.permissions,
+                        color=r.color,
+                        hoist=r.hoist,
+                        mentionable=r.mentionable,
+                    )
+                    roles_created += 1
+                    await asyncio.sleep(0.45)
+                except Exception:
+                    pass
+
+            # 3. Recreate uncategorized channels
+            ch_created = 0
+            for ch in sorted(src.channels, key=lambda c: c.position):
+                if ch.category is not None:
+                    continue
+                try:
+                    if isinstance(ch, discord.TextChannel):
+                        await dst.create_text_channel(name=ch.name, topic=ch.topic, slowmode_delay=ch.slowmode_delay, nsfw=ch.nsfw)
+                    elif isinstance(ch, discord.VoiceChannel):
+                        await dst.create_voice_channel(name=ch.name, user_limit=ch.user_limit)
+                    ch_created += 1
+                    await asyncio.sleep(0.45)
+                except Exception:
+                    pass
+
+            # 4. Recreate categories & their children
+            for cat in sorted(src.categories, key=lambda c: c.position):
+                try:
+                    new_cat = await dst.create_category(name=cat.name)
+                    await asyncio.sleep(0.4)
+                    for ch in sorted(cat.channels, key=lambda c: c.position):
+                        if isinstance(ch, discord.TextChannel):
+                            await dst.create_text_channel(
+                                name=ch.name,
+                                category=new_cat,
+                                topic=ch.topic,
+                                slowmode_delay=ch.slowmode_delay,
+                                nsfw=ch.nsfw,
+                            )
+                        elif isinstance(ch, discord.VoiceChannel):
+                            await dst.create_voice_channel(
+                                name=ch.name,
+                                category=new_cat,
+                                user_limit=ch.user_limit,
+                            )
+                        ch_created += 1
+                        await asyncio.sleep(0.45)
+                except Exception:
+                    pass
+
+            await status.edit(
+                content="\n".join([
+                    "> `-` **Server Clone Complete**",
+                    f"> `—` **Source:** **{src.name}** → **Target:** **{dst.name}**",
+                    f"> `—` **Cloned:** `{roles_created}` roles · `{ch_created}` channels",
+                    "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+                ])
+            )
+        except Exception as e:
+            await status.edit(content=f"> `!` **Clone Error:** `{e}`")
 
 
 async def setup(bot: commands.Bot) -> None:

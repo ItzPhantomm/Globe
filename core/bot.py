@@ -66,31 +66,44 @@ class GlobeBot(commands.Bot):
 
     async def on_ready(self) -> None:
         import time
-        self._start_time = time.monotonic()
-        self._start_epoch = time.time()
+        first_ready = self._start_time is None
+        if first_ready:
+            self._start_time = time.monotonic()
+            self._start_epoch = time.time()
 
-        from ui import print_startup_table, banner
-        from auth_handlers import auth
+            from ui import print_startup_table, banner
+            from auth_handlers import auth
 
-        # Ensure auth._token is synced with bot's token if not set
-        token_str = auth.token or getattr(self.http, "token", "") or settings.discord_token
-        if not auth.token and token_str:
-            auth._token = token_str
+            # Ensure auth._token is synced with bot's token if not set
+            token_str = auth.token or getattr(self.http, "token", "") or settings.discord_token
+            if not auth.token and token_str:
+                auth._token = token_str
 
-        banner()
-        print_startup_table(
-            token_preview=auth.masked(),
-            prefix=settings.prefix,
-            owner_id=self.user.id if self.user else 0,
-            module_count=len(self._loaded_modules),
-        )
-        log_event("ready", f"logged in as {self.user} ({self.user.id if self.user else '?'})")
-        log_info(f"Loaded modules: {', '.join(self._loaded_modules) or 'none'}")
+            banner()
+            print_startup_table(
+                token_preview=auth.masked(),
+                prefix=settings.prefix,
+                owner_id=self.user.id if self.user else 0,
+                module_count=len(self._loaded_modules),
+            )
+            log_event("ready", f"logged in as {self.user} ({self.user.id if self.user else '?'})")
+            log_info(f"Loaded modules: {', '.join(self._loaded_modules) or 'none'}")
+        else:
+            log_event("reconnect", f"gateway resumed as {self.user}")
 
         # Explicitly initialize and verify Default Globe Rich Presence
         if status_cog := self.get_cog("Status"):
             if hasattr(status_cog, "apply_default_rpc"):
                 await status_cog.apply_default_rpc()
+
+    async def close(self) -> None:
+        """Flush buffered tracker records before closing gateway connections."""
+        try:
+            from data.tracker import tracker
+            tracker.flush()
+        except Exception:
+            pass
+        await super().close()
 
     # ── Command logging via listener (discord.py-self has no on_command event) ──
 

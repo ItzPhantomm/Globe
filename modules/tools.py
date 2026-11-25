@@ -13,9 +13,11 @@ Advanced practical tools:
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
 import socket
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -28,8 +30,6 @@ from discord.ext import commands
 from config import settings
 from footprint_handlers import footprint
 from ui import log_info, log_warn, log_err
-
-P = settings.prefix
 
 GIFT_RE = re.compile(r"(?:discord\.gift|discord\.com/gifts?)/([a-zA-Z0-9]+)", re.IGNORECASE)
 REDEEM_URL = "https://discord.com/api/v9/entitlements/gift-codes/{code}/redeem"
@@ -90,6 +90,19 @@ class Tools(commands.Cog):
         self._privacy_enabled: bool = False
         self._privacy_until: float | None = None
         self._pending_privacy_messages: dict[int, list[int]] = {}
+        self._ghost_pings: deque[dict[str, Any]] = deque(maxlen=50)
+
+    async def _resolve_input(self, ctx: commands.Context, text: str | None) -> str | None:
+        """Return provided text or content of replied-to message."""
+        if text:
+            return text.strip()
+        if ctx.message.reference and ctx.message.reference.message_id:
+            try:
+                ref_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+                return ref_msg.content.strip()
+            except Exception:
+                return None
+        return None
 
     def _get_http_client(self) -> httpx.AsyncClient:
         """Provide a persistent, connection-pooled HTTP client instance."""
@@ -496,6 +509,170 @@ class Tools(commands.Cog):
         ]
         await ctx.send("\n".join(lines))
 
+    @commands.command(name="b64", aliases=["base64"])
+    async def b64(self, ctx: commands.Context, mode: str | None = None, *, text: str | None = None) -> None:
+        """
+        Base64 encode/decode. Usage: `g.b64 <text>` (auto) or `g.b64 encode|decode <text>`.
+        """
+        await ctx.message.delete()
+        if mode and mode.lower() in ("encode", "enc", "e", "decode", "dec", "d"):
+            action_mode = mode.lower()
+            raw = await self._resolve_input(ctx, text)
+        else:
+            action_mode = "auto"
+            combined = f"{mode} {text}".strip() if (mode and text) else mode
+            raw = await self._resolve_input(ctx, combined)
+
+        if not raw:
+            await ctx.send(f"> `!` **Usage:** `{settings.prefix}b64 [encode|decode] <text>`", delete_after=5)
+            return
+
+        if action_mode in ("decode", "dec", "d"):
+            try:
+                res = base64.b64decode(raw.encode("utf-8"), validate=True).decode("utf-8")
+                label = "Decoded (Base64 → Text)"
+            except Exception as e:
+                await ctx.send(f"> `!` **Base64 Decode Error:** `{e}`", delete_after=5)
+                return
+        elif action_mode in ("encode", "enc", "e"):
+            res = base64.b64encode(raw.encode("utf-8")).decode("utf-8")
+            label = "Encoded (Text → Base64)"
+        else:
+            # Auto-detect valid padded Base64 printable UTF-8
+            try:
+                decoded_bytes = base64.b64decode(raw.encode("utf-8"), validate=True)
+                decoded_str = decoded_bytes.decode("utf-8")
+                if decoded_str.isprintable() and len(raw) >= 4 and len(raw) % 4 == 0:
+                    res = decoded_str
+                    label = "Decoded (Base64 → Text)"
+                else:
+                    raise ValueError
+            except Exception:
+                res = base64.b64encode(raw.encode("utf-8")).decode("utf-8")
+                label = "Encoded (Text → Base64)"
+
+        await ctx.send("\n".join([
+            f"> `-` **Base64 Converter** · *{label}*",
+            f"> `—` **Input:** `{raw[:120]}`",
+            f"> `•` **Result:** `{res[:1500]}`",
+            "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]))
+
+    @commands.command(name="hex", aliases=["hexify", "unhex"])
+    async def hex_cmd(self, ctx: commands.Context, *, text: str | None = None) -> None:
+        """Auto-detecting UTF-8 ↔ Hexadecimal converter."""
+        await ctx.message.delete()
+        raw = await self._resolve_input(ctx, text)
+        if not raw:
+            await ctx.send(f"> `!` **Usage:** `{settings.prefix}hex <text or hex>`", delete_after=5)
+            return
+
+        compact = raw.replace(" ", "").removeprefix("0x")
+        if len(compact) >= 2 and len(compact) % 2 == 0 and all(c in "0123456789abcdefABCDEF" for c in compact):
+            try:
+                res = bytes.fromhex(compact).decode("utf-8")
+                label = "Decoded (Hex → Text)"
+            except Exception:
+                res = raw.encode("utf-8").hex(" ")
+                label = "Encoded (Text → Hex)"
+        else:
+            res = raw.encode("utf-8").hex(" ")
+            label = "Encoded (Text → Hex)"
+
+        await ctx.send("\n".join([
+            f"> `-` **Hex Converter** · *{label}*",
+            f"> `—` **Input:** `{raw[:120]}`",
+            f"> `•` **Result:** `{res[:1500]}`",
+            "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]))
+
+    @commands.command(name="bin", aliases=["binary", "unbin"])
+    async def bin_cmd(self, ctx: commands.Context, *, text: str | None = None) -> None:
+        """Auto-detecting Text ↔ 8-bit Binary converter."""
+        await ctx.message.delete()
+        raw = await self._resolve_input(ctx, text)
+        if not raw:
+            await ctx.send(f"> `!` **Usage:** `{settings.prefix}bin <text or binary>`", delete_after=5)
+            return
+
+        bits = raw.replace(" ", "")
+        if len(bits) >= 8 and len(bits) % 8 == 0 and set(bits).issubset({"0", "1"}):
+            try:
+                res = "".join(chr(int(bits[i:i + 8], 2)) for i in range(0, len(bits), 8))
+                label = "Decoded (Binary → Text)"
+            except Exception:
+                res = " ".join(format(b, "08b") for b in raw.encode("utf-8"))
+                label = "Encoded (Text → Binary)"
+        else:
+            res = " ".join(format(b, "08b") for b in raw.encode("utf-8"))
+            label = "Encoded (Text → Binary)"
+
+        await ctx.send("\n".join([
+            f"> `-` **Binary Converter** · *{label}*",
+            f"> `—` **Input:** `{raw[:120]}`",
+            f"> `•` **Result:** `{res[:1500]}`",
+            "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]))
+
+    # ── Passive Intelligence: Ghost-Ping Radar & Mutuals OSINT ───────────────
+
+    @commands.command(name="radar", aliases=["ghostpings", "pings", "gpradar"])
+    async def radar(self, ctx: commands.Context, action: str | None = None) -> None:
+        """
+        Inspect caught ghost-pings (`@you`, `@everyone`, `@here`, or your roles) across all servers.
+        Use `g.radar clear` to wipe the log.
+        """
+        await ctx.message.delete()
+        if action and action.lower() in ("clear", "wipe", "reset"):
+            self._ghost_pings.clear()
+            await ctx.send("> `-` **Ghost-Ping Radar Cleared.**", delete_after=4)
+            return
+
+        if not self._ghost_pings:
+            await ctx.send("> `-` **Ghost-Ping Radar:** No deleted mentions recorded yet.", delete_after=6)
+            return
+
+        lines = [f"> `-` **Ghost-Ping Radar ({len(self._ghost_pings)} caught)**"]
+        for entry in list(self._ghost_pings)[-8:][::-1]:
+            lines.append(
+                f"> `—` **{entry['author']}** in **{entry['where']}** (<t:{entry['ts']}:R>): `{entry['content'][:140]}`"
+            )
+        lines.append("> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**")
+        await ctx.send("\n".join(lines), delete_after=25)
+
+    @commands.command(name="mutuals", aliases=["shared", "finduser", "stalk"])
+    async def mutuals(self, ctx: commands.Context, *, user: discord.User) -> None:
+        """Scan all mutual guilds for a user's nickname, top role, status, and live voice channel."""
+        await ctx.message.delete()
+        shared_lines: list[str] = []
+        active_vc: str | None = None
+        status_str = "offline"
+
+        for guild in self.bot.guilds:
+            m = guild.get_member(user.id)
+            if not m:
+                continue
+            if str(m.status) != "offline":
+                status_str = str(m.status)
+            nick = f" (nick: `{m.nick}`)" if m.nick else ""
+            top_role = m.top_role.name if m.top_role and not m.top_role.is_default() else "none"
+            vc_tag = ""
+            if m.voice and m.voice.channel:
+                vc_tag = f" · 🔊 `{m.voice.channel.name}`"
+                active_vc = f"**{guild.name}** → `#{m.voice.channel.name}`"
+            shared_lines.append(f"> `—` **{guild.name}**{nick} · role `{top_role}`{vc_tag}")
+
+        header = [
+            f"> `-` **Mutuals OSINT:** **{user}** (`{user.id}`)",
+            f"> `•` **Shared Guilds:** `{len(shared_lines)}` · **Status:** `{status_str}`",
+        ]
+        if active_vc:
+            header.append(f"> `•` **Live Voice:** {active_vc}")
+
+        body = shared_lines[:15] if shared_lines else ["> `—` *No mutual servers in cache.*"]
+        footer = ["> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**"]
+        await ctx.send("\n".join(header + body + footer), delete_after=25)
+
     # ── Advanced OSINT Link & Invite / Guild Intelligence ────────────────────
 
     @commands.command(name="linkinfo", aliases=["link", "linkosint", "urlinfo"])
@@ -765,7 +942,7 @@ class Tools(commands.Cog):
                     log_info("DM Privacy mode auto-disabled (duration expired).")
 
                 if message.guild is None or isinstance(message.channel, discord.DMChannel):
-                    if not message.content.startswith(P):
+                    if not message.content.startswith(settings.prefix):
                         self._pending_privacy_messages.setdefault(message.channel.id, []).append(message.id)
             return
 
@@ -873,6 +1050,31 @@ class Tools(commands.Cog):
         channel_id = getattr(raw, "channel_id", None)
         if channel_id and (channel_id in self._pending_privacy_messages or self.bot.get_channel(channel_id) is None):
             await self._wipe_dm_seen_messages(channel_id)
+
+    @commands.Cog.listener()
+    async def on_message_delete(self, message: discord.Message) -> None:
+        """Capture deleted messages that mentioned us, @everyone/@here, or our roles."""
+        if not self.bot.user or message.author.bot or message.author.id == self.bot.user.id:
+            return
+        mentioned = (
+            self.bot.user in message.mentions
+            or message.mention_everyone
+            or (
+                message.guild is not None
+                and isinstance(me := message.guild.get_member(self.bot.user.id), discord.Member)
+                and any(r in message.role_mentions for r in me.roles)
+            )
+        )
+        if not mentioned:
+            return
+        where = f"{message.guild.name} #{getattr(message.channel, 'name', 'ch')}" if message.guild else "DM"
+        content = message.content or ("[Attachment]" if message.attachments else "[Embed]")
+        self._ghost_pings.append({
+            "author": str(message.author),
+            "where": where,
+            "content": content,
+            "ts": int(time.time()),
+        })
 
 
 async def setup(bot: commands.Bot) -> None:

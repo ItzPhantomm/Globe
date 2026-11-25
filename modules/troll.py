@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time
 import discord
 from discord.ext import commands
 
@@ -15,14 +16,15 @@ from config import settings
 from footprint_handlers import footprint
 from ui import log_info, log_warn
 
-P = settings.prefix
-
 
 class Troll(commands.Cog):
-    """Trolling, ghost pinging, text flooding, and interactive pranks."""
+    """Trolling, ghost pinging, text flooding, mimicry, and interactive pranks."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        self._mimic_targets: dict[int, int] = {}  # {channel_id: user_id}
+        self._react_targets: dict[int, str] = {}  # {user_id: emoji}
+        self._last_mimic_ts: float = 0.0
 
     # ── Ghost Ping ────────────────────────────────────────────────────────────
 
@@ -123,6 +125,73 @@ class Troll(commands.Cog):
                 break
         await asyncio.sleep(4)
         await msg.delete()
+
+    # ── Stealth / Live Mimic & React Spam ─────────────────────────────────────
+
+    @commands.command(name="mimic", aliases=["copycat", "echo_user"])
+    async def mimic(self, ctx: commands.Context, target: discord.User) -> None:
+        """Mirror every message sent by a target user in this channel."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        if self.bot.user and target.id == self.bot.user.id:
+            await ctx.send("❌ Cannot mimic yourself.", delete_after=4)
+            return
+        self._mimic_targets[ctx.channel.id] = target.id
+        await ctx.send(f"> `-` **Mimic Armed:** Mirroring **{target}** in this channel.", delete_after=5)
+
+    @commands.command(name="unmimic", aliases=["stopmimic"])
+    async def unmimic(self, ctx: commands.Context) -> None:
+        """Stop mimicking users in the current channel."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        removed = self._mimic_targets.pop(ctx.channel.id, None)
+        if removed:
+            await ctx.send("> `-` **Mimic Stopped** in this channel.", delete_after=4)
+        else:
+            await ctx.send("> `!` No active mimic in this channel.", delete_after=4)
+
+    @commands.command(name="reactspam", aliases=["rspam", "stalkreact"])
+    async def reactspam(self, ctx: commands.Context, target: discord.User, emoji: str | None = None) -> None:
+        """
+        Auto-react to every new message from a target user across all visible channels.
+        Omit emoji (or pass `off`) to stop reacting to that user.
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        if not emoji or emoji.lower() in ("off", "stop", "clear"):
+            self._react_targets.pop(target.id, None)
+            await ctx.send(f"> `-` **React-Spam Stopped** for **{target}**.", delete_after=4)
+            return
+        self._react_targets[target.id] = emoji
+        await ctx.send(f"> `-` **React-Spam Armed:** Reacting {emoji} to **{target}**.", delete_after=5)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if not self.bot.user or message.author.id == self.bot.user.id or message.author.bot:
+            return
+
+        # 1. Live Mimic
+        mimic_uid = self._mimic_targets.get(message.channel.id)
+        if mimic_uid == message.author.id and message.content:
+            now = time.monotonic()
+            if now - self._last_mimic_ts >= 1.2 and not footprint.is_spamming(message.channel.id, threshold=10, window=10.0):
+                self._last_mimic_ts = now
+                try:
+                    await message.channel.send(message.content[:1900])
+                    footprint.record_action(message.channel.id)
+                except Exception:
+                    pass
+
+        # 2. Target React Spam
+        if emoji := self._react_targets.get(message.author.id):
+            try:
+                await message.add_reaction(emoji)
+                footprint.record_action(message.channel.id)
+            except Exception:
+                pass
 
 
 async def setup(bot: commands.Bot) -> None:
