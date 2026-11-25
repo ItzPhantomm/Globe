@@ -626,6 +626,77 @@ class Moderation(commands.Cog):
         except Exception as e:
             await status.edit(content=f"> `!` **Clone Error:** `{e}`")
 
+    # ── Server Security & Permission Auditor ──────────────────────────────────
+
+    @commands.command(name="auditperms", aliases=["secaudit", "permaudit", "auditserver"])
+    async def auditperms(self, ctx: commands.Context, guild_id: Optional[int] = None) -> None:
+        """Scan a server's roles and channels for dangerous or misconfigured permissions."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        guild = self.bot.get_guild(guild_id) if guild_id else ctx.guild
+        if not guild:
+            await ctx.send("> `!` **Guild not found.**", delete_after=5)
+            return
+
+        dangerous_flags = (
+            ("administrator", "Administrator"),
+            ("manage_guild", "Manage Server"),
+            ("manage_roles", "Manage Roles"),
+            ("manage_channels", "Manage Channels"),
+            ("manage_webhooks", "Manage Webhooks"),
+            ("ban_members", "Ban Members"),
+            ("kick_members", "Kick Members"),
+            ("mention_everyone", "Mention Everyone"),
+        )
+
+        findings: list[str] = []
+
+        # 1. Check @everyone role for any elevated or risky permissions
+        default_role = guild.default_role
+        ev_risks = [label for attr, label in dangerous_flags if getattr(default_role.permissions, attr, False)]
+        if ev_risks:
+            findings.append(f"> `—` **[CRITICAL] `@everyone`** holds: `{', '.join(ev_risks)}`")
+
+        # 2. Check other non-managed roles for admin / high-risk permissions
+        admin_roles = [
+            r for r in guild.roles
+            if not r.is_default() and not r.managed and r.permissions.administrator
+        ]
+        if admin_roles:
+            role_names = ", ".join(f"`{r.name}`" for r in sorted(admin_roles, key=lambda x: x.position, reverse=True)[:8])
+            findings.append(f"> `—` **[HIGH] Admin Roles ({len(admin_roles)}):** {role_names}")
+
+        # 3. Check roles with Manage Roles / Manage Webhooks / Ban without Admin
+        elevated_roles = []
+        for r in guild.roles:
+            if r.is_default() or r.managed or r.permissions.administrator:
+                continue
+            r_risks = [label for attr, label in dangerous_flags[1:6] if getattr(r.permissions, attr, False)]
+            if r_risks:
+                elevated_roles.append(f"`{r.name}` ({', '.join(r_risks[:2])})")
+        if elevated_roles:
+            findings.append(f"> `—` **[MED] Elevated Roles ({len(elevated_roles)}):** {', '.join(elevated_roles[:6])}")
+
+        # 4. Check readable channels where @everyone explicitly has Manage Webhooks or Manage Channels
+        open_ch_risks = []
+        for ch in guild.channels:
+            ow = ch.overwrites_for(default_role)
+            if ow.manage_webhooks is True or ow.manage_channels is True or ow.manage_permissions is True:
+                open_ch_risks.append(f"`#{ch.name}`")
+        if open_ch_risks:
+            findings.append(f"> `—` **[HIGH] Exposed Channel Overwrites:** {', '.join(open_ch_risks[:6])}")
+
+        header = [
+            f"> `-` **Permission Security Audit:** **{guild.name}** (`{guild.id}`)",
+            f"> `•` **Roles Scanned:** `{len(guild.roles)}` · **Channels Scanned:** `{len(guild.channels)}`",
+        ]
+        if not findings:
+            findings = ["> `—` **Clean:** No dangerous `@everyone` or channel overwrite leaks detected."]
+        footer = ["> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**"]
+        await ctx.send("\n".join(header + findings + footer), delete_after=25)
+
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Moderation(bot))

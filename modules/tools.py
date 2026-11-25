@@ -91,6 +91,12 @@ class Tools(commands.Cog):
         self._privacy_until: float | None = None
         self._pending_privacy_messages: dict[int, list[int]] = {}
         self._ghost_pings: deque[dict[str, Any]] = deque(maxlen=50)
+        self._stalk_targets: set[int] = set()
+        self._stalk_logs: deque[dict[str, Any]] = deque(maxlen=100)
+        self._gsniper_enabled: bool = False
+        self._gsniper_entered: set[int] = set()
+        self._schedules: dict[int, dict[str, Any]] = {}
+        self._schedule_seq: int = 0
 
     async def _resolve_input(self, ctx: commands.Context, text: str | None) -> str | None:
         """Return provided text or content of replied-to message."""
@@ -673,6 +679,231 @@ class Tools(commands.Cog):
         footer = ["> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**"]
         await ctx.send("\n".join(header + body + footer), delete_after=25)
 
+    # ── Relationship Backup & Unfriend/Block Detector ─────────────────────────
+
+    @staticmethod
+    def _diff_relationships(
+        old_friends: dict[str, dict[str, str]],
+        new_friends: dict[str, dict[str, str]],
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        """Return (removed, added) friend records between two {uid: info} snapshots."""
+        removed = [old_friends[uid] for uid in old_friends if uid not in new_friends]
+        added = [new_friends[uid] for uid in new_friends if uid not in old_friends]
+        return removed, added
+
+    def _snapshot_friends(self) -> dict[str, dict[str, str]]:
+        friends: dict[str, dict[str, str]] = {}
+        for rel in getattr(self.bot, "friends", []) or []:
+            u = getattr(rel, "user", rel)
+            uid = str(getattr(u, "id", ""))
+            if uid:
+                friends[uid] = {
+                    "id": uid,
+                    "username": str(getattr(u, "name", u)),
+                    "global_name": str(getattr(u, "global_name", "") or ""),
+                }
+        return friends
+
+    @commands.command(name="friendsbackup", aliases=["backupfriends", "fbackup"])
+    async def friendsbackup(self, ctx: commands.Context) -> None:
+        """Snapshot your current Discord friends list to `data/backups/friends.json`."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        import json
+        from pathlib import Path
+
+        snap = self._snapshot_friends()
+        out_dir = Path("data") / "backups"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / "friends.json"
+        out_file.write_text(json.dumps({"ts": int(time.time()), "friends": snap}, indent=2), encoding="utf-8")
+
+        await ctx.send(
+            f"> `-` **Friends Snapshot Saved:** `{len(snap)}` friends archived to `{out_file}`.",
+            delete_after=8,
+        )
+
+    @commands.command(name="friendsdiff", aliases=["unfriended", "fdiff", "whounfriended"])
+    async def friendsdiff(self, ctx: commands.Context) -> None:
+        """Compare live friends against your last snapshot to expose silent unfriends/blocks."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        import json
+        from pathlib import Path
+
+        out_file = Path("data") / "backups" / "friends.json"
+        if not out_file.exists():
+            snap = self._snapshot_friends()
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(json.dumps({"ts": int(time.time()), "friends": snap}, indent=2), encoding="utf-8")
+            await ctx.send(
+                f"> `-` **Baseline Created:** `{len(snap)}` friends saved. Run `{settings.prefix}friendsdiff` later to detect changes.",
+                delete_after=8,
+            )
+            return
+
+        old_data = json.loads(out_file.read_text(encoding="utf-8"))
+        old_friends = old_data.get("friends", {})
+        cur_friends = self._snapshot_friends()
+        removed, added = self._diff_relationships(old_friends, cur_friends)
+
+        lines = [
+            f"> `-` **Relationship Diff** · *Baseline <t:{old_data.get('ts', 0)}:R>*",
+            f"> `•` **Current Friends:** `{len(cur_friends)}` (was `{len(old_friends)}`)",
+        ]
+        if removed:
+            rem_str = ", ".join(f"**{r['username']}** (`{r['id']}`)" for r in removed[:10])
+            lines.append(f"> `—` **Removed / Unfriended ({len(removed)}):** {rem_str}")
+        else:
+            lines.append("> `—` **Removed / Unfriended:** `0`")
+        if added:
+            add_str = ", ".join(f"**{a['username']}** (`{a['id']}`)" for a in added[:10])
+            lines.append(f"> `—` **Newly Added ({len(added)}):** {add_str}")
+        lines.append("> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**")
+        await ctx.send("\n".join(lines), delete_after=25)
+
+    # ── Real-Time User Stalker ────────────────────────────────────────────────
+
+    @commands.command(name="stalk", aliases=["watchuser", "trackuser"])
+    async def stalk(self, ctx: commands.Context, target: str) -> None:
+        """
+        Monitor a user's username, display name, avatar, and online transitions.
+        Pass `off` / `clear` to stop all tracking, or a user to toggle.
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        if target.lower() in ("off", "clear", "stop"):
+            self._stalk_targets.clear()
+            await ctx.send("> `-` **User Stalker Cleared.**", delete_after=4)
+            return
+        try:
+            user = await commands.UserConverter().convert(ctx, target)
+        except Exception:
+            await ctx.send(f"> `!` **User not found:** `{target}`", delete_after=4)
+            return
+        if user.id in self._stalk_targets:
+            self._stalk_targets.remove(user.id)
+            await ctx.send(f"> `-` **Stopped Stalking:** **{user}** (`{user.id}`).", delete_after=5)
+        else:
+            self._stalk_targets.add(user.id)
+            await ctx.send(f"> `-` **Now Stalking:** **{user}** (`{user.id}`) · use `{settings.prefix}stalklog` to view events.", delete_after=6)
+
+    @commands.command(name="stalklog", aliases=["stalklogs", "watchlog"])
+    async def stalklog(self, ctx: commands.Context, user: discord.User | None = None) -> None:
+        """View recorded username, avatar, and status transitions from stalked users."""
+        await ctx.message.delete()
+        entries = list(self._stalk_logs)
+        if user:
+            entries = [e for e in entries if e["uid"] == user.id]
+        if not entries:
+            await ctx.send(f"> `-` **Stalker Log:** No events captured (`{len(self._stalk_targets)}` target(s) armed).", delete_after=6)
+            return
+        lines = [f"> `-` **Stalker Activity Log ({len(entries)} events)**"]
+        for e in entries[-10:][::-1]:
+            lines.append(f"> `—` <t:{e['ts']}:R> **{e['user']}**: {e['detail']}")
+        lines.append("> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**")
+        await ctx.send("\n".join(lines), delete_after=25)
+
+    # ── Giveaway & Drop Sniper ────────────────────────────────────────────────
+
+    @commands.command(name="gsniper", aliases=["giveawaysniper", "gw"])
+    async def gsniper(self, ctx: commands.Context, mode: str | None = None) -> None:
+        """Toggle automated giveaway sniper (`g.gsniper on|off`). Uses human-jitter delay."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        if mode and mode.lower() in ("on", "enable", "1"):
+            self._gsniper_enabled = True
+        elif mode and mode.lower() in ("off", "disable", "0"):
+            self._gsniper_enabled = False
+        else:
+            self._gsniper_enabled = not self._gsniper_enabled
+        state = "🟢 **ENABLED** *(1.5s–4.5s human jitter)*" if self._gsniper_enabled else "🔴 **DISABLED**"
+        await ctx.send(f"> `-` **Giveaway Sniper:** {state}", delete_after=6)
+
+    # ── Recurring Message Scheduler ───────────────────────────────────────────
+
+    @commands.command(name="schedule", aliases=["sched", "autorepeat", "autobump"])
+    async def schedule_cmd(self, ctx: commands.Context, interval: str, *, message_text: str) -> None:
+        """
+        Schedule a recurring message in the current channel (e.g. `g.schedule 2h !d bump`).
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        secs = _parse_duration(interval)
+        if not secs or secs < 15:
+            await ctx.send("> `!` **Invalid interval.** Minimum `15s` (e.g. `60s`, `15m`, `2h`).", delete_after=5)
+            return
+
+        self._schedule_seq += 1
+        sid = self._schedule_seq
+        ch = ctx.channel
+
+        async def _runner() -> None:
+            try:
+                while True:
+                    await asyncio.sleep(secs)
+                    if not footprint.is_spamming(ch.id):
+                        try:
+                            await ch.send(message_text)
+                            footprint.record_action(ch.id)
+                        except Exception:
+                            pass
+            except asyncio.CancelledError:
+                pass
+
+        task = asyncio.create_task(_runner())
+        self._schedules[sid] = {
+            "task": task,
+            "interval": interval,
+            "channel": getattr(ch, "name", str(ch.id)),
+            "text": message_text[:60],
+        }
+        await ctx.send(
+            f"> `-` **Schedule `#{sid}` Armed:** Every `{interval}` → `{message_text[:60]}`",
+            delete_after=6,
+        )
+
+    @commands.command(name="schedules", aliases=["listschedules", "jobs"])
+    async def schedules_list(self, ctx: commands.Context) -> None:
+        """List active recurring scheduled messages."""
+        await ctx.message.delete()
+        if not self._schedules:
+            await ctx.send("> `-` **Schedules:** None active.", delete_after=5)
+            return
+        lines = [f"> `-` **Active Schedules ({len(self._schedules)})**"]
+        for sid, info in self._schedules.items():
+            lines.append(f"> `—` **`#{sid}`** every `{info['interval']}` in `#{info['channel']}`: `{info['text']}`")
+        await ctx.send("\n".join(lines), delete_after=15)
+
+    @commands.command(name="unschedule", aliases=["stopschedule", "delschedule"])
+    async def unschedule_cmd(self, ctx: commands.Context, schedule_id: str) -> None:
+        """Cancel a scheduled message by ID, or pass `all`."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        if schedule_id.lower() == "all":
+            count = len(self._schedules)
+            for info in self._schedules.values():
+                info["task"].cancel()
+            self._schedules.clear()
+            await ctx.send(f"> `-` **Cancelled all `{count}` schedules.**", delete_after=5)
+            return
+        try:
+            sid = int(schedule_id.lstrip("#"))
+            info = self._schedules.pop(sid, None)
+            if info:
+                info["task"].cancel()
+                await ctx.send(f"> `-` **Cancelled Schedule `#{sid}`.**", delete_after=4)
+            else:
+                await ctx.send(f"> `!` Schedule `#{sid}` not found.", delete_after=4)
+        except ValueError:
+            await ctx.send(f"> `!` Invalid schedule ID `{schedule_id}`.", delete_after=4)
+
     # ── Advanced OSINT Link & Invite / Guild Intelligence ────────────────────
 
     @commands.command(name="linkinfo", aliases=["link", "linkosint", "urlinfo"])
@@ -932,6 +1163,45 @@ class Tools(commands.Cog):
                         except Exception as e:
                             log_err(f"Nitro sniper request error: {e}")
 
+        # 1b. Giveaway Sniper Listener
+        if (
+            self._gsniper_enabled
+            and message.author.bot
+            and message.id not in self._gsniper_entered
+            and message.guild is not None
+        ):
+            embed_blob = " ".join(
+                f"{e.title or ''} {e.description or ''}" for e in message.embeds
+            ).lower()
+            is_giveaway = (
+                "giveaway" in embed_blob
+                or "giveaway" in message.content.lower()
+                or "react with 🎉" in embed_blob
+            )
+            if is_giveaway:
+                self._gsniper_entered.add(message.id)
+                import random
+                await asyncio.sleep(random.uniform(1.5, 4.5))
+                if not footprint.is_spamming(message.channel.id):
+                    try:
+                        # Try clicking an Enter/Join button first if present, else react 🎉
+                        clicked = False
+                        for row in getattr(message, "components", []):
+                            for comp in getattr(row, "children", []):
+                                lbl = (getattr(comp, "label", "") or "").lower()
+                                if any(k in lbl for k in ("enter", "join", "participate")):
+                                    await comp.click()
+                                    clicked = True
+                                    break
+                            if clicked:
+                                break
+                        if not clicked:
+                            await message.add_reaction("🎉")
+                        footprint.record_action(message.channel.id)
+                        log_info(f"Giveaway sniper entered {message.id} in #{message.channel}")
+                    except Exception:
+                        pass
+
         # 2. Channel Auto-react & Auto-reply
         if message.author.id == self.bot.user.id:
             # 3. DM Privacy Mode: Check duration expiry & track outgoing DM messages
@@ -1075,6 +1345,44 @@ class Tools(commands.Cog):
             "content": content,
             "ts": int(time.time()),
         })
+
+    @commands.Cog.listener()
+    async def on_user_update(self, before: discord.User, after: discord.User) -> None:
+        """Log username, global name, and avatar changes for stalked targets."""
+        if after.id not in self._stalk_targets:
+            return
+        changes: list[str] = []
+        if before.name != after.name:
+            changes.append(f"username `{before.name}` → `{after.name}`")
+        if getattr(before, "global_name", None) != getattr(after, "global_name", None):
+            changes.append(f"display `{before.global_name}` → `{after.global_name}`")
+        if str(before.display_avatar.url) != str(after.display_avatar.url):
+            changes.append(f"avatar changed ([new]({after.display_avatar.url}))")
+        if changes:
+            self._stalk_logs.append({
+                "uid": after.id,
+                "user": str(after),
+                "detail": "; ".join(changes),
+                "ts": int(time.time()),
+            })
+
+    @commands.Cog.listener()
+    async def on_presence_update(self, before: discord.Member, after: discord.Member) -> None:
+        """Log online/offline status transitions for stalked targets."""
+        if after.id not in self._stalk_targets:
+            return
+        if str(before.status) != str(after.status):
+            # Deduplicate identical rapid multi-guild presence fires within 3s
+            now_ts = int(time.time())
+            detail = f"status `{before.status}` → `{after.status}`"
+            if self._stalk_logs and self._stalk_logs[-1]["uid"] == after.id and self._stalk_logs[-1]["detail"] == detail and now_ts - self._stalk_logs[-1]["ts"] <= 3:
+                return
+            self._stalk_logs.append({
+                "uid": after.id,
+                "user": str(after),
+                "detail": detail,
+                "ts": now_ts,
+            })
 
 
 async def setup(bot: commands.Bot) -> None:

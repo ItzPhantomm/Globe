@@ -102,6 +102,7 @@ class Status(commands.Cog):
         self._init_done: bool = False
         self._spoofer_running: bool = False
         self._spoofer_cancel: bool = False
+        self._rotate_task: asyncio.Task | None = None
 
     async def apply_default_rpc(self) -> bool:
         """Apply official default Globe Rich Presence and verify."""
@@ -301,6 +302,135 @@ class Status(commands.Cog):
         ]
         await status_msg.edit(content="\n".join(lines))
         await status_msg.delete(delay=10)
+
+    # ── Profile, HypeSquad & Rotating Custom Status ───────────────────────────
+
+    @commands.command(name="hypesquad", aliases=["hs", "house"])
+    async def hypesquad(self, ctx: commands.Context, house: str) -> None:
+        """Switch or leave HypeSquad House: `bravery`, `brilliance`, `balance`, or `leave`."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        house_map = {"bravery": 1, "brilliance": 2, "balance": 3}
+        choice = house.lower().strip()
+        token_val = getattr(self.bot.http, "token", "") or settings.discord_token
+        if not token_val:
+            await ctx.send("> `!` Missing authorization token.", delete_after=4)
+            return
+
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                if choice in ("leave", "none", "off"):
+                    resp = await client.delete(
+                        "https://discord.com/api/v9/hypesquad/online",
+                        headers={"Authorization": token_val},
+                    )
+                    label = "Left HypeSquad"
+                elif choice in house_map:
+                    resp = await client.post(
+                        "https://discord.com/api/v9/hypesquad/online",
+                        headers={"Authorization": token_val},
+                        json={"house_id": house_map[choice]},
+                    )
+                    label = f"HypeSquad House → **{choice.title()}**"
+                else:
+                    await ctx.send("> `!` Choose `bravery`, `brilliance`, `balance`, or `leave`.", delete_after=5)
+                    return
+            if resp.status_code in (200, 204):
+                await ctx.send(f"> `-` {label}", delete_after=5)
+            else:
+                await ctx.send(f"> `!` Discord returned HTTP `{resp.status_code}`.", delete_after=5)
+        except Exception as e:
+            await ctx.send(f"> `!` **HypeSquad Error:** `{e}`", delete_after=5)
+
+    @commands.command(name="bio", aliases=["setbio", "aboutme"])
+    async def bio(self, ctx: commands.Context, *, text: str = "") -> None:
+        """Update your Discord profile bio (omit text to clear)."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        token_val = getattr(self.bot.http, "token", "") or settings.discord_token
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.patch(
+                    "https://discord.com/api/v9/users/@me/profile",
+                    headers={"Authorization": token_val},
+                    json={"bio": text[:190]},
+                )
+            if resp.status_code == 200:
+                msg = f"Bio updated (`{len(text[:190])}` chars)." if text else "Bio cleared."
+                await ctx.send(f"> `-` **{msg}**", delete_after=5)
+            else:
+                await ctx.send(f"> `!` Discord returned HTTP `{resp.status_code}`.", delete_after=5)
+        except Exception as e:
+            await ctx.send(f"> `!` **Bio Error:** `{e}`", delete_after=5)
+
+    @commands.command(name="customstatus", aliases=["cs_status", "cstatus"])
+    async def customstatus(self, ctx: commands.Context, *, text: str = "") -> None:
+        """Set or clear your Discord custom status text."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        if not text or text.lower() in ("off", "clear", "none"):
+            await self.bot.change_presence(activities=[])
+            await ctx.send("> `-` **Custom Status Cleared.**", delete_after=4)
+            return
+        act = discord.CustomActivity(name="Custom Status", state=text[:128])
+        await self.bot.change_presence(activities=[act])
+        await ctx.send(f"> `-` **Custom Status:** `{text[:128]}`", delete_after=5)
+
+    @commands.command(name="statusrotate", aliases=["rotatestatus", "biorotate"])
+    async def statusrotate(self, ctx: commands.Context, interval_sec: str, *, texts: str = "") -> None:
+        """
+        Cycle custom status texts automatically.
+        Syntax: `g.statusrotate 15 Text 1 | Text 2 | Text 3` or `g.statusrotate off`
+        """
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+
+        if interval_sec.lower() in ("off", "stop", "clear"):
+            if self._rotate_task and not self._rotate_task.done():
+                self._rotate_task.cancel()
+                self._rotate_task = None
+            await ctx.send("> `-` **Status Rotator Stopped.**", delete_after=4)
+            return
+
+        try:
+            delay = max(5.0, float(interval_sec))
+        except ValueError:
+            await ctx.send(f"> `!` **Usage:** `{settings.prefix}statusrotate <seconds>=5+ <text1 | text2 | ...>`", delete_after=5)
+            return
+
+        items = [t.strip() for t in texts.split("|") if t.strip()]
+        if len(items) < 2:
+            await ctx.send("> `!` Provide at least 2 entries separated by `|`.", delete_after=5)
+            return
+
+        if self._rotate_task and not self._rotate_task.done():
+            self._rotate_task.cancel()
+
+        async def _rotator() -> None:
+            idx = 0
+            try:
+                while True:
+                    txt = items[idx % len(items)][:128]
+                    try:
+                        await self.bot.change_presence(activities=[discord.CustomActivity(name="Custom Status", state=txt)])
+                    except Exception:
+                        pass
+                    idx += 1
+                    await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                pass
+
+        self._rotate_task = asyncio.create_task(_rotator())
+        await ctx.send(
+            f"> `-` **Status Rotator Armed:** `{len(items)}` slides every `{delay:.0f}s`.",
+            delete_after=6,
+        )
 
     # ── Batch Badge & Game Variety Telemetry Spoofer ──────────────────────────
 
