@@ -646,7 +646,7 @@ class Tools(commands.Cog):
         lines.append("> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**")
         await ctx.send("\n".join(lines), delete_after=25)
 
-    @commands.command(name="mutuals", aliases=["shared", "finduser", "stalk"])
+    @commands.command(name="mutuals", aliases=["shared", "finduser"])
     async def mutuals(self, ctx: commands.Context, *, user: discord.User) -> None:
         """Scan all mutual guilds for a user's nickname, top role, status, and live voice channel."""
         await ctx.message.delete()
