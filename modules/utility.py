@@ -1822,6 +1822,57 @@ class Utility(commands.Cog):
         except Exception:
             pass
 
+    # ── Message Vault / Bookmarks ─────────────────────────────────────────────
+
+    @commands.command(name="save", aliases=["bookmark", "bm"])
+    async def save_cmd(self, ctx: commands.Context, *, tag: str = "general") -> None:
+        """Reply to any message to bookmark it into SQLite (`g.save [tag]`)."""
+        await ctx.message.delete()
+        if not ctx.message.reference or not ctx.message.reference.message_id:
+            await ctx.send(f"> `!` Reply to a message with `{settings.prefix}save [tag]`.", delete_after=5)
+            return
+        from data.tracker import tracker
+        try:
+            ref = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+            atts = [a.url for a in ref.attachments] if ref.attachments else []
+            bm_id = tracker.add_bookmark(
+                tag=tag.strip()[:40] or "general",
+                author_name=str(ref.author),
+                content=ref.content or ("[Attachment]" if atts else "[Embed]"),
+                jump_url=ref.jump_url,
+                attachments=atts,
+            )
+            await ctx.send(f"> `-` **Bookmarked `#{bm_id}`** under tag `{tag.strip()[:40]}`.", delete_after=5)
+        except Exception as e:
+            await ctx.send(f"> `!` **Bookmark Error:** `{e}`", delete_after=5)
+
+    @commands.command(name="saved", aliases=["bookmarks", "bms"])
+    async def saved_cmd(self, ctx: commands.Context, *, tag: str = "") -> None:
+        """List saved message bookmarks (optionally filter by tag or keyword)."""
+        await ctx.message.delete()
+        from data.tracker import tracker
+        rows = tracker.list_bookmarks(tag=tag.strip(), limit=8)
+        if not rows:
+            await ctx.send("> `-` **Bookmarks:** No matching saved messages.", delete_after=5)
+            return
+        lines = [f"> `-` **Saved Bookmarks ({len(rows)})**"]
+        for r in rows:
+            lines.append(
+                f"> `—` **`#{r['id']}`** `[{r['tag']}]` **{r['author_name']}**: `{r['content'][:100]}` [Jump]({r['jump_url']})"
+            )
+        lines.append("> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**")
+        await ctx.send("\n".join(lines), delete_after=25)
+
+    @commands.command(name="unsave", aliases=["delbookmark", "unbm"])
+    async def unsave_cmd(self, ctx: commands.Context, bookmark_id: int) -> None:
+        """Delete a saved bookmark by ID."""
+        await ctx.message.delete()
+        from data.tracker import tracker
+        if tracker.delete_bookmark(bookmark_id):
+            await ctx.send(f"> `-` **Deleted Bookmark `#{bookmark_id}`.**", delete_after=4)
+        else:
+            await ctx.send(f"> `!` Bookmark `#{bookmark_id}` not found.", delete_after=4)
+
     # ── Listeners ─────────────────────────────────────────────────────────────
 
     @commands.Cog.listener()

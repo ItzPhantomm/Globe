@@ -71,6 +71,27 @@ class MessageTracker:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_snipes_ts ON snipes(timestamp DESC)"
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS kv_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bookmarks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tag TEXT,
+                    author_name TEXT,
+                    content TEXT,
+                    jump_url TEXT,
+                    attachments TEXT,
+                    timestamp REAL
+                )
+                """
+            )
 
     def flush(self) -> None:
         """Flush pending buffered message records to SQLite in a single transaction."""
@@ -216,6 +237,80 @@ class MessageTracker:
             ]
         except Exception:
             return []
+
+    def set_state(self, key: str, value: str) -> None:
+        """Persist a JSON/string runtime setting into SQLite."""
+        try:
+            conn = self._get_connection()
+            conn.execute(
+                "INSERT INTO kv_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+    def get_state(self, key: str, default: str | None = None) -> str | None:
+        """Retrieve a persisted runtime setting from SQLite."""
+        try:
+            conn = self._get_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT value FROM kv_state WHERE key = ?", (key,))
+            row = cur.fetchone()
+            return row[0] if row else default
+        except Exception:
+            return default
+
+    def add_bookmark(
+        self,
+        tag: str,
+        author_name: str,
+        content: str,
+        jump_url: str,
+        attachments: list[str] | None = None,
+    ) -> int:
+        """Save a message bookmark and return its row ID."""
+        conn = self._get_connection()
+        att_str = "\n".join(attachments) if attachments else ""
+        cur = conn.execute(
+            "INSERT INTO bookmarks (tag, author_name, content, jump_url, attachments, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            (tag, author_name, content[:1500], jump_url, att_str, time.time()),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+
+    def list_bookmarks(self, tag: str = "", limit: int = 8) -> list[dict]:
+        """List saved bookmarks optionally filtered by tag or content substring."""
+        try:
+            conn = self._get_connection()
+            cur = conn.cursor()
+            if tag:
+                q = f"%{tag}%"
+                cur.execute(
+                    "SELECT id, tag, author_name, content, jump_url, timestamp FROM bookmarks WHERE tag LIKE ? OR content LIKE ? ORDER BY id DESC LIMIT ?",
+                    (q, q, limit),
+                )
+            else:
+                cur.execute(
+                    "SELECT id, tag, author_name, content, jump_url, timestamp FROM bookmarks ORDER BY id DESC LIMIT ?",
+                    (limit,),
+                )
+            return [
+                {"id": r[0], "tag": r[1], "author_name": r[2], "content": r[3], "jump_url": r[4], "timestamp": r[5]}
+                for r in cur.fetchall()
+            ]
+        except Exception:
+            return []
+
+    def delete_bookmark(self, bookmark_id: int) -> bool:
+        """Delete a bookmark by ID. Returns True if a row was removed."""
+        try:
+            conn = self._get_connection()
+            cur = conn.execute("DELETE FROM bookmarks WHERE id = ?", (bookmark_id,))
+            conn.commit()
+            return cur.rowcount > 0
+        except Exception:
+            return False
 
 
 tracker = MessageTracker()

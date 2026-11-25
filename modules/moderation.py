@@ -29,6 +29,7 @@ class Moderation(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self._forcenick_tasks: dict[int, str] = {}
+        self._lockdown_saved: dict[int, dict[int, Optional[bool]]] = {}
 
     # ── Kick & Ban ─────────────────────────────────────────────────────────────
 
@@ -696,6 +697,113 @@ class Moderation(commands.Cog):
             findings = ["> `—` **Clean:** No dangerous `@everyone` or channel overwrite leaks detected."]
         footer = ["> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**"]
         await ctx.send("\n".join(header + findings + footer), delete_after=25)
+
+    # ── Channel Analytics, Targeted Purges & Server Lockdown ──────────────────
+
+    @commands.command(name="topchatters", aliases=["chatters", "leaderboard"])
+    async def topchatters(self, ctx: commands.Context, depth: int = 250) -> None:
+        """Rank the most active users in the last N messages of the current channel."""
+        await ctx.message.delete()
+        scan = max(25, min(depth, 500))
+        counts: dict[str, int] = {}
+        total = 0
+        async for m in ctx.channel.history(limit=scan):
+            if m.author.bot:
+                continue
+            name = str(m.author)
+            counts[name] = counts.get(name, 0) + 1
+            total += 1
+
+        if not counts:
+            await ctx.send("> `!` No user messages found.", delete_after=4)
+            return
+
+        ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        lines = [f"> `-` **Top Chatters** *(last `{total}` user msgs)*"]
+        for idx, (user_name, cnt) in enumerate(ranked, 1):
+            pct = (cnt / total) * 100
+            lines.append(f"> `—` **`#{idx}`** **{user_name}** · `{cnt}` msgs (`{pct:.1f}%`)")
+        lines.append("> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**")
+        await ctx.send("\n".join(lines), delete_after=20)
+
+    @commands.command(name="purgelinks", aliases=["cleanlinks"])
+    async def purgelinks(self, ctx: commands.Context, limit: int = 100) -> None:
+        """Delete messages containing URLs/invites in the last N messages (requires Manage Messages)."""
+        await ctx.message.delete()
+        if not ctx.guild:
+            return
+        cap = max(1, min(limit, 300))
+        deleted = 0
+        async for m in ctx.channel.history(limit=cap):
+            if "http://" in m.content or "https://" in m.content or "discord.gg/" in m.content:
+                try:
+                    await m.delete()
+                    deleted += 1
+                    await asyncio.sleep(0.35)
+                except Exception:
+                    pass
+        await ctx.send(f"> `-` **Purged `{deleted}` link messages.**", delete_after=4)
+
+    @commands.command(name="purgebots", aliases=["cleanbots"])
+    async def purgebots(self, ctx: commands.Context, limit: int = 100) -> None:
+        """Delete bot messages in the last N messages (requires Manage Messages)."""
+        await ctx.message.delete()
+        if not ctx.guild:
+            return
+        cap = max(1, min(limit, 300))
+        deleted = 0
+        async for m in ctx.channel.history(limit=cap):
+            if m.author.bot:
+                try:
+                    await m.delete()
+                    deleted += 1
+                    await asyncio.sleep(0.35)
+                except Exception:
+                    pass
+        await ctx.send(f"> `-` **Purged `{deleted}` bot messages.**", delete_after=4)
+
+    @commands.command(name="lockdown", aliases=["serverlock"])
+    async def lockdown(self, ctx: commands.Context) -> None:
+        """Lock `@everyone` Send Messages across all text channels in this server."""
+        await ctx.message.delete()
+        if not ctx.guild or not self.bot.is_owner_id(ctx.author.id):
+            return
+        saved: dict[int, Optional[bool]] = {}
+        locked = 0
+        for ch in ctx.guild.text_channels:
+            ow = ch.overwrites_for(ctx.guild.default_role)
+            saved[ch.id] = ow.send_messages
+            if ow.send_messages is not False:
+                ow.send_messages = False
+                try:
+                    await ch.set_permissions(ctx.guild.default_role, overwrite=ow, reason="Globe server lockdown")
+                    locked += 1
+                    await asyncio.sleep(0.35)
+                except Exception:
+                    pass
+        self._lockdown_saved[ctx.guild.id] = saved
+        await ctx.send(f"> `-` **Server Lockdown Active:** Locked `{locked}` text channels.", delete_after=8)
+
+    @commands.command(name="unlockdown", aliases=["unlockserver"])
+    async def unlockdown(self, ctx: commands.Context) -> None:
+        """Restore `@everyone` Send Messages permissions saved prior to `g.lockdown`."""
+        await ctx.message.delete()
+        if not ctx.guild or not self.bot.is_owner_id(ctx.author.id):
+            return
+        saved = self._lockdown_saved.pop(ctx.guild.id, {})
+        restored = 0
+        for ch in ctx.guild.text_channels:
+            ow = ch.overwrites_for(ctx.guild.default_role)
+            target_val = saved.get(ch.id, None)
+            if ow.send_messages != target_val:
+                ow.send_messages = target_val
+                try:
+                    await ch.set_permissions(ctx.guild.default_role, overwrite=ow, reason="Globe server unlockdown")
+                    restored += 1
+                    await asyncio.sleep(0.35)
+                except Exception:
+                    pass
+        await ctx.send(f"> `-` **Server Lockdown Lifted:** Restored `{restored}` text channels.", delete_after=8)
 
 
 async def setup(bot: commands.Bot) -> None:

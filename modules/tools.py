@@ -102,6 +102,38 @@ class Tools(commands.Cog):
         self._keyword_hits: deque[dict[str, Any]] = deque(maxlen=50)
         self._vanity_task: asyncio.Task | None = None
         self._vanity_target: str | None = None
+        self._hydrate_state()
+
+    def _hydrate_state(self) -> None:
+        """Restore persisted flags/lists from SQLite so settings survive restarts."""
+        import json
+        try:
+            from data.tracker import tracker
+            if wh := tracker.get_state("alert_webhook"):
+                self._alert_webhook = wh
+            if raw_kw := tracker.get_state("keywords"):
+                self._keywords = set(json.loads(raw_kw))
+            if raw_st := tracker.get_state("stalk_targets"):
+                self._stalk_targets = {int(x) for x in json.loads(raw_st)}
+            if tracker.get_state("gsniper_enabled") == "1":
+                self._gsniper_enabled = True
+            if tracker.get_state("privacy_enabled") == "1":
+                self._privacy_enabled = True
+        except Exception:
+            pass
+
+    def _save_state(self) -> None:
+        """Persist active surveillance/automation flags to SQLite."""
+        import json
+        try:
+            from data.tracker import tracker
+            tracker.set_state("alert_webhook", self._alert_webhook or "")
+            tracker.set_state("keywords", json.dumps(sorted(self._keywords)))
+            tracker.set_state("stalk_targets", json.dumps(sorted(self._stalk_targets)))
+            tracker.set_state("gsniper_enabled", "1" if self._gsniper_enabled else "0")
+            tracker.set_state("privacy_enabled", "1" if self._privacy_enabled else "0")
+        except Exception:
+            pass
 
     async def _resolve_input(self, ctx: commands.Context, text: str | None) -> str | None:
         """Return provided text or content of replied-to message."""
@@ -782,6 +814,7 @@ class Tools(commands.Cog):
             return
         if target.lower() in ("off", "clear", "stop"):
             self._stalk_targets.clear()
+            self._save_state()
             await ctx.send("> `-` **User Stalker Cleared.**", delete_after=4)
             return
         try:
@@ -791,9 +824,11 @@ class Tools(commands.Cog):
             return
         if user.id in self._stalk_targets:
             self._stalk_targets.remove(user.id)
+            self._save_state()
             await ctx.send(f"> `-` **Stopped Stalking:** **{user}** (`{user.id}`).", delete_after=5)
         else:
             self._stalk_targets.add(user.id)
+            self._save_state()
             await ctx.send(f"> `-` **Now Stalking:** **{user}** (`{user.id}`) · use `{settings.prefix}stalklog` to view events.", delete_after=6)
 
     @commands.command(name="stalklog", aliases=["stalklogs", "watchlog"])
@@ -932,12 +967,14 @@ class Tools(commands.Cog):
             return
         if webhook_url.lower() in ("off", "clear", "none", "stop"):
             self._alert_webhook = None
+            self._save_state()
             await ctx.send("> `-` **Alert Webhook Disabled.**", delete_after=4)
             return
         if not webhook_url.startswith("https://"):
             await ctx.send("> `!` Provide a valid Discord webhook URL.", delete_after=4)
             return
         self._alert_webhook = webhook_url.strip()
+        self._save_state()
         await ctx.send("> `-` **Alert Webhook Armed:** Forwarding radar, stalk & keyword hits.", delete_after=5)
 
     @commands.command(name="kw", aliases=["keyword", "keywords", "watchword"])
@@ -952,12 +989,15 @@ class Tools(commands.Cog):
         act = action.lower()
         if act == "add" and phrase.strip():
             self._keywords.add(phrase.strip().lower())
+            self._save_state()
             await ctx.send(f"> `-` **Keyword Armed:** `{phrase.strip().lower()}`", delete_after=5)
         elif act in ("del", "remove", "rm") and phrase.strip():
             self._keywords.discard(phrase.strip().lower())
+            self._save_state()
             await ctx.send(f"> `-` **Keyword Removed:** `{phrase.strip().lower()}`", delete_after=5)
         elif act == "clear":
             self._keywords.clear()
+            self._save_state()
             await ctx.send("> `-` **All Keywords Cleared.**", delete_after=4)
         else:
             kw_list = ", ".join(f"`{k}`" for k in sorted(self._keywords)) or "*none*"
@@ -1075,6 +1115,113 @@ class Tools(commands.Cog):
             "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
         ]
         await ctx.send("\n".join(lines), delete_after=20)
+
+    # ── Friend Request Hygiene, Webhook Inspector & QR Generator ──────────────
+
+    @commands.command(name="acceptfriends", aliases=["acceptall", "acceptreqs"])
+    async def acceptfriends(self, ctx: commands.Context) -> None:
+        """Accept all pending incoming Discord friend requests."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        token_val = getattr(self.bot.http, "token", "") or settings.discord_token
+        client = self._get_http_client()
+        accepted = 0
+        try:
+            resp = await client.get(
+                "https://discord.com/api/v9/users/@me/relationships",
+                headers={"Authorization": token_val},
+            )
+            if resp.status_code != 200:
+                await ctx.send(f"> `!` Relationships API HTTP `{resp.status_code}`.", delete_after=5)
+                return
+            for rel in resp.json():
+                if rel.get("type") == 3:  # Incoming friend request
+                    put_r = await client.put(
+                        f"https://discord.com/api/v9/users/@me/relationships/{rel['id']}",
+                        headers={"Authorization": token_val},
+                        json={},
+                    )
+                    if put_r.status_code in (200, 204):
+                        accepted += 1
+                    await asyncio.sleep(0.5)
+            await ctx.send(f"> `-` **Accepted `{accepted}` incoming friend requests.**", delete_after=6)
+        except Exception as e:
+            await ctx.send(f"> `!` **Accept Friends Error:** `{e}`", delete_after=5)
+
+    @commands.command(name="clearoutgoing", aliases=["cancelreqs", "clearreqs"])
+    async def clearoutgoing(self, ctx: commands.Context) -> None:
+        """Cancel all pending outgoing friend requests."""
+        await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
+        token_val = getattr(self.bot.http, "token", "") or settings.discord_token
+        client = self._get_http_client()
+        cancelled = 0
+        try:
+            resp = await client.get(
+                "https://discord.com/api/v9/users/@me/relationships",
+                headers={"Authorization": token_val},
+            )
+            if resp.status_code != 200:
+                await ctx.send(f"> `!` Relationships API HTTP `{resp.status_code}`.", delete_after=5)
+                return
+            for rel in resp.json():
+                if rel.get("type") == 4:  # Outgoing friend request
+                    del_r = await client.delete(
+                        f"https://discord.com/api/v9/users/@me/relationships/{rel['id']}",
+                        headers={"Authorization": token_val},
+                    )
+                    if del_r.status_code in (200, 204):
+                        cancelled += 1
+                    await asyncio.sleep(0.5)
+            await ctx.send(f"> `-` **Cancelled `{cancelled}` outgoing friend requests.**", delete_after=6)
+        except Exception as e:
+            await ctx.send(f"> `!` **Clear Outgoing Error:** `{e}`", delete_after=5)
+
+    @commands.command(name="webhookinfo", aliases=["whinfo", "checkwebhook"])
+    async def webhookinfo(self, ctx: commands.Context, webhook_url: str) -> None:
+        """Inspect a Discord webhook URL without posting any message."""
+        await ctx.message.delete()
+        if "discord.com/api/webhooks" not in webhook_url:
+            await ctx.send("> `!` Invalid Discord webhook URL.", delete_after=4)
+            return
+        try:
+            client = self._get_http_client()
+            resp = await client.get(webhook_url.strip())
+            if resp.status_code != 200:
+                await ctx.send(f"> `!` Webhook returned HTTP `{resp.status_code}`.", delete_after=5)
+                return
+            d = resp.json()
+            lines = [
+                "> `-` **Webhook Inspection**",
+                f"> `—` **Name:** **{d.get('name')}** (`{d.get('id')}`)",
+                f"> `—` **Guild ID:** `{d.get('guild_id')}` · **Channel ID:** `{d.get('channel_id')}`",
+                f"> `•` **Type:** `{d.get('type')}` · **App ID:** `{d.get('application_id') or 'None'}`",
+                "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+            ]
+            await ctx.send("\n".join(lines), delete_after=20)
+        except Exception as e:
+            await ctx.send(f"> `!` **Webhook Info Error:** `{e}`", delete_after=5)
+
+    @commands.command(name="qr", aliases=["qrcode"])
+    async def qr_cmd(self, ctx: commands.Context, *, payload: str) -> None:
+        """Generate a scannable QR code PNG for any URL or text."""
+        await ctx.message.delete()
+        import io
+        url = f"https://api.qrserver.com/v1/create-qr-code/?size=320x320&data={quote_plus(payload[:500])}"
+        try:
+            client = self._get_http_client()
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                await ctx.send(f"> `!` QR service returned HTTP `{resp.status_code}`.", delete_after=4)
+                return
+            await ctx.send(
+                f"> `-` **QR Code:** `{payload[:80]}`",
+                file=discord.File(io.BytesIO(resp.content), filename="qrcode.png"),
+            )
+        except Exception as e:
+            await ctx.send(f"> `!` **QR Error:** `{e}`", delete_after=4)
 
     # ── Advanced OSINT Link & Invite / Guild Intelligence ────────────────────
 
