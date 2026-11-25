@@ -674,7 +674,12 @@ class Utility(commands.Cog):
             # Toggle off
             self.bot._no_prefix_enabled = False
             self.bot._no_prefix_until = None
-            await ctx.send("🔴 **No-Prefix mode:** `DISABLED`", delete_after=5)
+            lines = [
+                "> `-` **No-Prefix Mode** · `DISABLED`",
+                f"> `—` **Active Prefix:** `{settings.prefix}` required for all commands",
+                "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+            ]
+            await ctx.send("\n".join(lines), delete_after=6)
             log_info("No-prefix mode disabled.")
             return
 
@@ -692,7 +697,14 @@ class Utility(commands.Cog):
         else:
             self.bot._no_prefix_until = None
 
-        await ctx.send(f"🟢 **No-Prefix mode:** `ENABLED` — Duration: {duration_desc}\n*Commands trigger directly on first word (e.g. `ui`, `ping`). Sentences like 'ban this guy' are ignored.*", delete_after=8)
+        lines = [
+            "> `-` **No-Prefix Mode** · `ENABLED`",
+            f"> `—` **Duration:** {duration_desc}",
+            "> `—` **Usage:** Commands trigger directly on first word (e.g. `ui`, `ping`)",
+            "> `•` *Normal chat sentences are safely ignored.*",
+            "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]
+        await ctx.send("\n".join(lines), delete_after=8)
         log_info(f"No-prefix mode enabled ({duration_desc}).")
 
     # ── Steal Utilities ───────────────────────────────────────────────────────

@@ -34,14 +34,16 @@ class CustomRpcActivity(discord.BaseActivity):
         return self._data
 
 
-def get_default_globe_activities(user_id: int | None = None, start_time: float | None = None) -> list[discord.BaseActivity]:
+def get_default_globe_activities(
+    user_id: int | None = None,
+    start_time: float | None = None,
+    include_custom_status: bool = False,
+) -> list[discord.BaseActivity]:
     """Build the official default Globe Rich Presence activities list."""
     friend_link = f"https://discord.com/users/{user_id}" if user_id else "https://discord.com"
     start_ms = int((start_time if start_time else time.time()) * 1000)
 
     # 1. Primary Rich Presence Activity (Watching Globe with elapsed timer and interactive buttons)
-    # Uses official Discord Application ID & verified Rich Presence Art Asset Snowflake ID
-    # Fully compatible across both modern and legacy discord.py-self builds (Android/Termux & Linux)
     activity_button_cls = getattr(discord, "ActivityButton", None)
     buttons_param: list[Any]
     if activity_button_cls is not None:
@@ -85,13 +87,15 @@ def get_default_globe_activities(user_id: int | None = None, start_time: float |
         }
         primary_act = CustomRpcActivity(rpc_payload)
 
-    # 2. Custom Status Activity (Guarantees public visibility to non-friends, mutual server members, and DMs)
-    custom_status = discord.CustomActivity(
-        name="Custom Status",
-        state="Watching Globe · Made by ylemn",
-    )
-
-    return [primary_act, custom_status]
+    activities: list[discord.BaseActivity] = [primary_act]
+    if include_custom_status:
+        activities.append(
+            discord.CustomActivity(
+                name="Custom Status",
+                state="Watching Globe · Made by ylemn",
+            )
+        )
+    return activities
 
 
 class Status(commands.Cog):
@@ -103,15 +107,42 @@ class Status(commands.Cog):
         self._spoofer_running: bool = False
         self._spoofer_cancel: bool = False
         self._rotate_task: asyncio.Task | None = None
+        self._startup_rpc_enabled: bool = self._load_rpc_flag("startup_rpc", default=False)
+        self._custom_status_enabled: bool = self._load_rpc_flag("startup_custom_status", default=False)
+
+    @staticmethod
+    def _load_rpc_flag(key: str, default: bool) -> bool:
+        try:
+            from data.tracker import tracker
+            val = tracker.get_state(key)
+            if val is None:
+                return default
+            return val == "1"
+        except Exception:
+            return default
+
+    @staticmethod
+    def _save_rpc_flag(key: str, enabled: bool) -> None:
+        try:
+            from data.tracker import tracker
+            tracker.set_state(key, "1" if enabled else "0")
+        except Exception:
+            pass
 
     async def apply_default_rpc(self) -> bool:
-        """Apply official default Globe Rich Presence and verify."""
+        """Apply Globe Rich Presence on startup only if enabled; otherwise leave user status intact."""
+        if not self._startup_rpc_enabled:
+            self._init_done = True
+            log_info("Startup Globe RPC is disabled (user status left intact).")
+            return True
         try:
             user_id = self.bot.user.id if self.bot.user else None
             start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
-            activities = get_default_globe_activities(user_id, start_epoch)
-            
-            # Send dual presence: rich activity + custom status
+            activities = get_default_globe_activities(
+                user_id,
+                start_epoch,
+                include_custom_status=self._custom_status_enabled,
+            )
             await self.bot.change_presence(activities=activities)
             self._init_done = True
             log_info("Rpc Initialized successful")
@@ -127,17 +158,51 @@ class Status(commands.Cog):
             await self.apply_default_rpc()
 
     @commands.command(name="defaultrpc", aliases=["globerpc", "resetrpc"])
-    async def defaultrpc(self, ctx: commands.Context) -> None:
-        """Reset presence back to default Globe Rich Presence."""
+    async def defaultrpc(self, ctx: commands.Context, mode: str | None = None) -> None:
+        """
+        Toggle or apply Globe Rich Presence (`g.globerpc [on|off|custom]`).
+        `off` keeps your own Discord status 100% intact across restarts.
+        """
         await ctx.message.delete()
+        if not self.bot.is_owner_id(ctx.author.id):
+            return
         if self._spoofer_running:
             self._spoofer_cancel = True
+
+        m = (mode or "").lower().strip()
+        if m in ("off", "disable", "0"):
+            self._startup_rpc_enabled = False
+            self._save_rpc_flag("startup_rpc", False)
+            await self.bot.change_presence(activities=[])
+            await ctx.send("\n".join([
+                "> `-` **Globe Startup RPC** · `DISABLED`",
+                "> `—` Your Discord status will remain completely untouched on startup.",
+                "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+            ]), delete_after=6)
+            return
+
+        if m == "custom":
+            self._custom_status_enabled = not self._custom_status_enabled
+            self._save_rpc_flag("startup_custom_status", self._custom_status_enabled)
+        else:
+            self._startup_rpc_enabled = True
+            self._save_rpc_flag("startup_rpc", True)
+
         user_id = self.bot.user.id if self.bot.user else ctx.author.id
         start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
-        activities = get_default_globe_activities(user_id, start_epoch)
+        activities = get_default_globe_activities(
+            user_id,
+            start_epoch,
+            include_custom_status=self._custom_status_enabled,
+        )
         await self.bot.change_presence(activities=activities, edit_settings=False)
-        msg = await ctx.send("🌐 Presence reset to official **Globe Rich Presence**.")
-        await msg.delete(delay=4)
+        cs_label = "Enabled" if self._custom_status_enabled else "Preserved (not overwritten)"
+        await ctx.send("\n".join([
+            "> `-` **Globe Rich Presence** · `ACTIVE`",
+            f"> `—` **Custom Status:** `{cs_label}`",
+            f"> `•` *Turn off anytime with `{settings.prefix}globerpc off`*",
+            "> `°` **__Globe__ — Minimal, Clean & Polished Architecture.**",
+        ]), delete_after=6)
 
     @commands.command(name="rpctimer", aliases=["settimer", "rpctime"])
     async def rpctimer(self, ctx: commands.Context, target_time: str) -> None:
