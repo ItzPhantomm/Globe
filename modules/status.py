@@ -107,7 +107,7 @@ class Status(commands.Cog):
         self._spoofer_running: bool = False
         self._spoofer_cancel: bool = False
         self._rotate_task: asyncio.Task | None = None
-        self._startup_rpc_enabled: bool = self._load_rpc_flag("startup_rpc", default=False)
+        self._startup_rpc_enabled: bool = self._load_rpc_flag("startup_rpc", default=True)
         self._custom_status_enabled: bool = self._load_rpc_flag("startup_custom_status", default=False)
 
     @staticmethod
