@@ -1920,6 +1920,11 @@ function renderQuestsState(q) {
   $("#q-runner-state").textContent = q.running ? "Running" : "Standby";
   $("#q-status-chip").textContent = q.running ? "Active" : "Standby";
   $("#q-status-line").textContent = q.status_line || "Ready to process pending Orb quests";
+  const startBtn = $("#btn-quest-start");
+  if (startBtn) {
+    startBtn.disabled = Boolean(q.running);
+    startBtn.textContent = q.running ? "Completing..." : "Start Completor";
+  }
 
   const cfg = q.config || {};
   $("#q-cfg-orbs")?.setAttribute("aria-pressed", String(cfg.orbs_only !== false));
@@ -1998,10 +2003,6 @@ $$("#q-task-chips input[type=checkbox]").forEach((cb) => cb.addEventListener("ch
   saveQuestConfig(true).catch(() => {});
 }));
 $("#btn-quest-cfg-save")?.addEventListener("click", () => saveQuestConfig(false));
-$("#btn-quest-sync")?.addEventListener("click", async () => {
-  await loadQuestsView(true);
-  toast("Synced live quests & Orbs balance");
-});
 $("#btn-quest-start")?.addEventListener("click", async () => {
   try {
     await saveQuestConfig(true);
