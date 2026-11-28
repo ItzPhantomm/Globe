@@ -250,6 +250,71 @@ def register_routes(
         await bot.change_presence(activities=[act])
         return _json({"ok": True, "state": text[:128]})
 
+    async def set_online_status(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        data = await _body(request)
+        mode = str(data.get("status", "online")).lower().strip()
+        mapping = {
+            "online": discord.Status.online,
+            "idle": discord.Status.idle,
+            "dnd": discord.Status.dnd,
+            "invisible": discord.Status.invisible,
+        }
+        st = mapping.get(mode)
+        if not st:
+            return _json({"error": "Use online, idle, dnd, or invisible"}, status=400)
+        await bot.change_presence(status=st)
+        return _json({"ok": True, "status": mode})
+
+    async def set_rich_activity(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        data = await _body(request)
+        kind = str(data.get("kind", "playing")).lower().strip()
+        title = str(data.get("title", "")).strip()[:128]
+        url = str(data.get("url", "")).strip()
+        elapsed = str(data.get("elapsed", "")).strip()
+
+        if kind == "clear":
+            await bot.change_presence(activity=None)
+            return _json({"ok": True, "kind": "clear"})
+
+        if kind == "globe":
+            from modules.status import get_default_globe_activities
+            from modules.tools import _parse_duration
+            offset = 0.0
+            if elapsed:
+                if ":" in elapsed:
+                    parts = elapsed.split(":")
+                    try:
+                        nums = [float(p) for p in parts]
+                        offset = (nums[0] * 3600 + nums[1] * 60 + nums[2]) if len(nums) == 3 else (nums[0] * 60 + nums[1])
+                    except ValueError:
+                        return _json({"error": "Invalid HH:MM:SS timer"}, status=400)
+                else:
+                    parsed = _parse_duration(elapsed)
+                    if parsed is None:
+                        return _json({"error": "Invalid duration (use HH:MM:SS or 45m)"}, status=400)
+                    offset = float(parsed)
+            start_epoch = time.time() - max(0.0, offset)
+            bot._start_epoch = start_epoch
+            uid = bot.user.id if bot.user else 0
+            await bot.change_presence(activities=get_default_globe_activities(uid, start_epoch))
+            return _json({"ok": True, "kind": "globe", "offset_s": int(offset)})
+
+        if not title:
+            return _json({"error": "Activity title is required"}, status=400)
+
+        if kind == "streaming":
+            act = discord.Streaming(name=title, url=url or "https://twitch.tv/twitch")
+        elif kind == "listening":
+            act = discord.Activity(type=discord.ActivityType.listening, name=title)
+        elif kind == "watching":
+            act = discord.Activity(type=discord.ActivityType.watching, name=title)
+        else:
+            act = discord.Game(name=title)
+        await bot.change_presence(activity=act)
+        return _json({"ok": True, "kind": kind, "title": title})
+
     async def set_bio(request: web.Request) -> web.Response:
         auth.authenticate_request(request, require_csrf=True)
         data = await _body(request)
@@ -481,6 +546,98 @@ def register_routes(
         tools._save_state()
         return _json({"ok": True, "webhook_set": bool(tools._alert_webhook)})
 
+    async def vanity_handler(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        tools = bot.get_cog("Tools")
+        if not tools:
+            return _json({"error": "Tools missing"}, status=503)
+        if request.method == "DELETE":
+            auth.authenticate_request(request, require_csrf=True)
+            if tools._vanity_task and not tools._vanity_task.done():
+                tools._vanity_task.cancel()
+                tools._vanity_task = None
+            target = tools._vanity_target
+            tools._vanity_target = None
+            return _json({"ok": True, "stopped": target})
+        if request.method == "POST":
+            auth.authenticate_request(request, require_csrf=True)
+            data = await _body(request)
+            code = str(data.get("code", "")).rstrip("/").split("/")[-1].strip()
+            if not code:
+                return _json({"error": "Vanity code required"}, status=400)
+            target_gid = int(str(data.get("guild_id") or "0") or 0) or None
+            delay = max(5.0, min(float(data.get("interval", 8.0)), 60.0))
+            if tools._vanity_task and not tools._vanity_task.done():
+                tools._vanity_task.cancel()
+            tools._vanity_target = code
+
+            async def _poll() -> None:
+                client = tools._get_http_client()
+                token_val = getattr(bot.http, "token", "") or ""
+                try:
+                    while True:
+                        resp = await client.get(f"https://discord.com/api/v9/invites/{code}")
+                        if resp.status_code == 404:
+                            note = "Alert only (no guild set)."
+                            if target_gid and token_val:
+                                cl = await client.patch(
+                                    f"https://discord.com/api/v9/guilds/{target_gid}/vanity-url",
+                                    headers={"Authorization": token_val},
+                                    json={"code": code},
+                                )
+                                note = f"Auto-claim HTTP {cl.status_code}"
+                            await broadcast({"type": "job", "data": {"job": "vanity", "code": code, "dropped": True, "note": note}})
+                            await tools._forward_alert(f"Vanity `{code}` Dropped", note)
+                            break
+                        await asyncio.sleep(delay)
+                except asyncio.CancelledError:
+                    pass
+
+            tools._vanity_task = asyncio.create_task(_poll())
+            return _json({"ok": True, "target": code, "interval": delay})
+        running = bool(tools._vanity_task and not tools._vanity_task.done())
+        return _json({"running": running, "target": tools._vanity_target if running else None})
+
+    async def inspect_tool(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        tools = bot.get_cog("Tools")
+        if not tools:
+            return _json({"error": "Tools missing"}, status=503)
+        data = await _body(request)
+        kind = str(data.get("kind", "ip")).lower().strip()
+        target = str(data.get("target", "")).strip()
+        if not target:
+            return _json({"error": "Target input required"}, status=400)
+        client = tools._get_http_client()
+        try:
+            if kind == "ip":
+                host = target.replace("https://", "").replace("http://", "").split("/")[0]
+                r = await client.get(f"http://ip-api.com/json/{host}?fields=status,message,country,regionName,city,timezone,isp,org,as,query")
+                return _json({"ok": True, "kind": "ip", "result": r.json()})
+            if kind == "dns":
+                host = target.replace("https://", "").replace("http://", "").split("/")[0]
+                infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+                ips = sorted({i[4][0] for i in infos})
+                return _json({"ok": True, "kind": "dns", "result": {"host": host, "records": ips}})
+            if kind == "headers":
+                url = target if target.startswith(("http://", "https://")) else f"https://{target}"
+                resp = await client.head(url, follow_redirects=True)
+                return _json({"ok": True, "kind": "headers", "result": {"url": url, "status": resp.status_code, "headers": dict(list(resp.headers.items())[:14])}})
+            if kind == "crypto":
+                alias_map = {"btc": "bitcoin", "eth": "ethereum", "sol": "solana", "xrp": "ripple", "doge": "dogecoin", "ltc": "litecoin"}
+                cid = alias_map.get(target.lower(), target.lower())
+                r = await client.get(f"https://api.coingecko.com/api/v3/simple/price?ids={cid}&vs_currencies=usd&include_24hr_change=true")
+                return _json({"ok": True, "kind": "crypto", "result": {"coin": cid, "data": r.json().get(cid)}})
+            if kind == "token":
+                r = await client.get("https://discord.com/api/v9/users/@me", headers={"Authorization": target})
+                if r.status_code != 200:
+                    return _json({"ok": True, "kind": "token", "result": {"valid": False, "status": r.status_code}})
+                u = r.json()
+                return _json({"ok": True, "kind": "token", "result": {"valid": True, "id": u.get("id"), "username": u.get("username"), "mfa": u.get("mfa_enabled"), "verified": u.get("verified")}})
+        except Exception as e:
+            return _json({"error": str(e)}, status=500)
+        return _json({"error": "Unknown tool kind"}, status=400)
+
     async def friends_action(request: web.Request) -> web.Response:
         auth.authenticate_request(request)
         tools = bot.get_cog("Tools")
@@ -584,6 +741,7 @@ def register_routes(
         out = []
         for g in bot.guilds:
             vcs = [{"id": str(c.id), "name": c.name, "members": len(c.members)} for c in g.voice_channels[:25]]
+            tcs = [{"id": str(c.id), "name": c.name} for c in g.text_channels[:30]]
             out.append({
                 "id": str(g.id),
                 "name": g.name,
@@ -593,8 +751,22 @@ def register_routes(
                 "channels_count": len(g.channels),
                 "locked": g.id in locked,
                 "voice_channels": vcs,
+                "text_channels": tcs,
             })
         return _json({"guilds": out})
+
+    async def dispatch_send(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        data = await _body(request)
+        cid_raw = str(data.get("channel_id", "")).strip()
+        content = str(data.get("content", "")).strip()[:2000]
+        if not cid_raw or not content:
+            return _json({"error": "Channel and message content required"}, status=400)
+        ch = bot.get_channel(int(cid_raw))
+        if not ch:
+            return _json({"error": "Channel not found"}, status=404)
+        msg = await ch.send(content)
+        return _json({"ok": True, "message_id": str(msg.id)})
 
     async def audit_guild(request: web.Request) -> web.Response:
         auth.authenticate_request(request)
@@ -846,6 +1018,8 @@ def register_routes(
     r.add_post("/api/v1/toggles", update_toggles)
 
     r.add_post("/api/v1/presence/custom", set_custom_status)
+    r.add_post("/api/v1/presence/status", set_online_status)
+    r.add_post("/api/v1/presence/activity", set_rich_activity)
     r.add_post("/api/v1/presence/bio", set_bio)
     r.add_post("/api/v1/presence/hypesquad", set_hypesquad)
     r.add_post("/api/v1/presence/rotate", set_status_rotate)
@@ -859,11 +1033,16 @@ def register_routes(
     r.add_get("/api/v1/intel/keywords", get_keywords)
     r.add_post("/api/v1/intel/keywords", update_keywords)
     r.add_post("/api/v1/intel/webhook", set_alert_webhook)
+    r.add_get("/api/v1/intel/vanity", vanity_handler)
+    r.add_post("/api/v1/intel/vanity", vanity_handler)
+    r.add_delete("/api/v1/intel/vanity", vanity_handler)
+    r.add_post("/api/v1/tools/inspect", inspect_tool)
     r.add_get("/api/v1/intel/friends/diff", friends_action)
     r.add_post("/api/v1/intel/friends", friends_action)
     r.add_post("/api/v1/intel/user-profile", profile_user)
 
     r.add_get("/api/v1/guilds", list_guilds)
+    r.add_post("/api/v1/dispatch/send", dispatch_send)
     r.add_get("/api/v1/guilds/{id}/audit", audit_guild)
     r.add_get("/api/v1/guilds/{id}/backup", backup_guild_download)
     r.add_post("/api/v1/guilds/lockdown", guild_lockdown)

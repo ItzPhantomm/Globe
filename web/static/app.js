@@ -4,7 +4,136 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 let CSRF = "";
 let WS = null;
 const latHistory = [];
+let selectedActivityKind = "globe";
 
+// ── Motion & M3 Expressive Polygon Morph Engine ───────────
+const M3_SHAPES = [
+  // Organic rounded 8-petal cookie
+  [
+    [50, 7], [65, 15], [82, 18], [85, 35],
+    [93, 50], [85, 65], [82, 82], [65, 85],
+    [50, 93], [35, 85], [18, 82], [15, 65],
+    [7, 50], [15, 35], [18, 18], [35, 15],
+  ],
+  // Android 4-leaf rounded clover
+  [
+    [50, 14], [69, 9], [86, 14], [91, 31],
+    [86, 50], [91, 69], [86, 86], [69, 91],
+    [50, 86], [31, 91], [14, 86], [9, 69],
+    [14, 50], [9, 31], [14, 14], [31, 9],
+  ],
+  // Soft burst star-squircle
+  [
+    [50, 5], [63, 21], [85, 15], [79, 37],
+    [95, 50], [79, 63], [85, 85], [63, 79],
+    [50, 95], [37, 79], [15, 85], [21, 63],
+    [5, 50], [21, 37], [15, 15], [37, 21],
+  ],
+  // Expressive squircle
+  [
+    [50, 8], [72, 9], [87, 13], [91, 28],
+    [92, 50], [91, 72], [87, 87], [72, 91],
+    [50, 92], [28, 91], [13, 87], [9, 72],
+    [8, 50], [9, 28], [13, 13], [28, 9],
+  ],
+];
+
+function ptsToSmoothPath(pts) {
+  const n = pts.length;
+  let d = "";
+  for (let i = 0; i < n; i++) {
+    const p0 = pts[(i - 1 + n) % n];
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    const mx = (p1[0] + p2[0]) / 2;
+    const my = (p1[1] + p2[1]) / 2;
+    if (i === 0) {
+      const pmx = (p0[0] + p1[0]) / 2;
+      const pmy = (p0[1] + p1[1]) / 2;
+      d += `M ${pmx.toFixed(2)} ${pmy.toFixed(2)} `;
+    }
+    d += `Q ${p1[0].toFixed(2)} ${p1[1].toFixed(2)} ${mx.toFixed(2)} ${my.toFixed(2)} `;
+  }
+  return d + "Z";
+}
+
+function initShapeMorph() {
+  const authPath = $("#auth-morph-path");
+  const navPath = $("#nav-morph-path");
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const initialD = ptsToSmoothPath(M3_SHAPES[0]);
+  if (authPath) authPath.setAttribute("d", initialD);
+  if (navPath) navPath.setAttribute("d", initialD);
+  if (reduced) return;
+
+  let t = 0;
+  function step() {
+    t += 0.011;
+    const total = M3_SHAPES.length;
+    const idxA = Math.floor(t) % total;
+    const idxB = (idxA + 1) % total;
+    const raw = t - Math.floor(t);
+    // Smooth M3 expressive ease
+    const k = raw < 0.5 ? 2 * raw * raw : 1 - Math.pow(-2 * raw + 2, 2) / 2;
+    const A = M3_SHAPES[idxA];
+    const B = M3_SHAPES[idxB];
+    const blended = A.map((pt, i) => [
+      pt[0] + (B[i][0] - pt[0]) * k,
+      pt[1] + (B[i][1] - pt[1]) * k,
+    ]);
+    const pathStr = ptsToSmoothPath(blended);
+    if (authPath && !$("#auth-gate").classList.contains("hidden")) authPath.setAttribute("d", pathStr);
+    if (navPath && !$("#workspace").classList.contains("hidden")) navPath.setAttribute("d", pathStr);
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+// Pointer-tracked spotlight borders on desktop
+function initSpotlightCards() {
+  let raf = 0;
+  let lastEv = null;
+  document.addEventListener("pointermove", (e) => {
+    lastEv = e;
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      if (!lastEv) return;
+      $$(".bento-surface").forEach((card) => {
+        const r = card.getBoundingClientRect();
+        card.style.setProperty("--mx", `${lastEv.clientX - r.left}px`);
+        card.style.setProperty("--my", `${lastEv.clientY - r.top}px`);
+      });
+    });
+  }, { passive: true });
+}
+
+function animateViewStagger(viewEl) {
+  if (!viewEl || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const targets = viewEl.querySelectorAll(".stagger-item");
+  if (!targets.length) return;
+  if (window.anime) {
+    window.anime.remove(targets);
+    window.anime({
+      targets,
+      translateY: [18, 0],
+      scale: [0.985, 1],
+      opacity: [0, 1],
+      duration: 520,
+      easing: "cubicBezier(0.34, 1.48, 0.64, 1)",
+      delay: window.anime.stagger(55),
+    });
+  } else {
+    targets.forEach((el, idx) => {
+      el.animate(
+        [{ opacity: 0, transform: "translateY(14px) scale(0.985)" }, { opacity: 1, transform: "translateY(0) scale(1)" }],
+        { duration: 420, delay: idx * 45, easing: "cubic-bezier(0.34, 1.48, 0.64, 1)", fill: "both" }
+      );
+    });
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────
 function toast(msg) {
   const el = document.createElement("div");
   el.className = "toast";
@@ -38,13 +167,12 @@ async function api(path, opts = {}) {
   return data;
 }
 
-// ── Orbital Wireframe Globe Canvas (Auth Screen) ──────────
+// ── Orbital Wireframe Canvas (Auth Screen) ────────────────
 function initOrbitalCanvas() {
   const canvas = $("#globe-canvas");
   if (!canvas || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const ctx = canvas.getContext("2d");
   let rot = 0;
-  let raf = 0;
 
   function resize() {
     canvas.width = canvas.offsetWidth * devicePixelRatio;
@@ -55,19 +183,16 @@ function initOrbitalCanvas() {
   window.addEventListener("resize", resize);
 
   function frame() {
-    if ($("#auth-gate").classList.contains("hidden")) {
-      cancelAnimationFrame(raf);
-      return;
-    }
+    if ($("#auth-gate").classList.contains("hidden")) return;
     const w = canvas.offsetWidth;
     const h = canvas.offsetHeight;
     ctx.clearRect(0, 0, w, h);
 
-    const cx = w * 0.50;
-    const cy = h * 0.27;
-    const r = Math.min(w, h) * 0.26;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
-    ctx.lineWidth = 1;
+    const cx = w * 0.54;
+    const cy = h * 0.33;
+    const r = Math.min(w, h) * 0.25;
+    ctx.strokeStyle = "rgba(94, 234, 212, 0.14)";
+    ctx.lineWidth = 1.1;
 
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -88,14 +213,16 @@ function initOrbitalCanvas() {
       ctx.stroke();
     }
 
-    rot += 0.0025;
-    raf = requestAnimationFrame(frame);
+    rot += 0.003;
+    requestAnimationFrame(frame);
   }
-  raf = requestAnimationFrame(frame);
+  requestAnimationFrame(frame);
 }
 
 // ── Auth Boot ─────────────────────────────────────────────
 async function checkSession() {
+  initShapeMorph();
+  initSpotlightCards();
   const me = await api("/api/v1/auth/me");
   if (!me.authenticated) {
     $("#auth-gate").classList.remove("hidden");
@@ -108,6 +235,7 @@ async function checkSession() {
   $("#workspace").classList.remove("hidden");
   connectWS();
   await loadOverview();
+  animateViewStagger($("#view-overview"));
 }
 
 $("#toggle-token-vis")?.addEventListener("click", () => {
@@ -134,6 +262,7 @@ $("#login-form")?.addEventListener("submit", async (e) => {
     $("#workspace").classList.remove("hidden");
     connectWS();
     await loadOverview();
+    animateViewStagger($("#view-overview"));
   } catch (err) {
     errEl.textContent = err.message;
     errEl.classList.remove("hidden");
@@ -198,6 +327,7 @@ function updateTelemetry(t) {
   $("#m-uptime").textContent = fmtUptime(t.uptime_s);
   $("#m-reach").textContent = `${t.guilds} / ${t.friends}`;
   $("#spark-latest").textContent = `${t.latency_ms} ms`;
+  $("#pill-extra").textContent = `· ${t.latency_ms}ms`;
   latHistory.push(Number(t.latency_ms) || 0);
   if (latHistory.length > 30) latHistory.shift();
   drawSparkline();
@@ -206,7 +336,7 @@ function updateTelemetry(t) {
 function drawSparkline() {
   if (latHistory.length === 0) return;
   const series = latHistory.length === 1 ? [latHistory[0], latHistory[0]] : latHistory;
-  const w = 420, h = 120, pad = 10;
+  const w = 420, h = 130, pad = 12;
   const max = Math.max(...series, 60);
   const min = Math.min(...series, 0);
   const span = Math.max(1, max - min);
@@ -219,60 +349,73 @@ function drawSparkline() {
   $("#spark-line").setAttribute("d", d);
   $("#spark-area").setAttribute("d", `${d} L${w},${h} L0,${h} Z`);
   const last = pts[pts.length - 1];
-  const dot = $("#spark-dot");
-  if (dot && last) {
-    dot.setAttribute("cx", last[0]);
-    dot.setAttribute("cy", last[1]);
+  if (last) {
+    $("#spark-dot")?.setAttribute("cx", last[0]);
+    $("#spark-dot")?.setAttribute("cy", last[1]);
+    $("#spark-dot-halo")?.setAttribute("cx", last[0]);
+    $("#spark-dot-halo")?.setAttribute("cy", last[1]);
   }
 }
 
 function handleJobProgress(d) {
+  const pill = $("#dynamic-pill");
   if (d.job === "spoofer") {
     const wrap = $("#spoofer-bar-wrap");
     if (d.done) {
       $("#spoofer-status").textContent = "Completed";
       $("#spoofer-bar").style.width = "100%";
+      pill?.classList.remove("active-job");
       setTimeout(() => wrap.classList.add("hidden"), 1500);
     } else {
       wrap.classList.remove("hidden");
+      pill?.classList.add("active-job");
       const pct = Math.round((d.current / Math.max(1, d.total)) * 100);
       $("#spoofer-bar").style.width = `${pct}%`;
       $("#spoofer-status").textContent = `[${d.current}/${d.total}] ${d.game}`;
+      $("#pill-extra").textContent = `· Spoofing ${d.current}/${d.total}`;
     }
   } else if (d.job === "deletedm") {
     toast(d.done ? `DM wipe finished: ${d.deleted} deleted` : `DM wipe progress: ${d.deleted} deleted`);
+  } else if (d.job === "vanity" && d.dropped) {
+    toast(`VANITY DROPPED: ${d.code} — ${d.note}`);
+    $("#vanity-badge").textContent = `Dropped: ${d.code}`;
   }
 }
 
 function applyToggles(toggles) {
-  $$("#switchboard .toggle").forEach((btn) => {
+  $$("#switchboard .m3-switch").forEach((btn) => {
     const key = btn.dataset.toggle;
     btn.setAttribute("aria-pressed", String(Boolean(toggles[key])));
   });
+  if (toggles.vanity_target) {
+    $("#vanity-badge").textContent = `Armed: ${toggles.vanity_target}`;
+  }
 }
 
 // ── Navigation ────────────────────────────────────────────
 const VIEW_TITLES = {
   overview: "Overview",
-  presence: "Presence & Spoofer",
-  intel: "Intelligence",
+  presence: "Presence Studio",
+  intel: "Intelligence & OSINT",
   servers: "Servers & Voice",
-  dms: "DMs & Vault",
+  dms: "DMs & Dispatch",
   system: "System & Jobs",
 };
 
 function switchView(name) {
   $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
   $("#view-title").textContent = VIEW_TITLES[name] || name;
   $("#sidebar").classList.remove("open");
+  animateViewStagger($(`#view-${name}`));
   if (name === "intel") loadIntel();
   if (name === "servers") loadGuilds();
   if (name === "dms") loadDMs();
   if (name === "system") loadSchedules();
 }
 
-$$(".nav-item").forEach((b) => b.addEventListener("click", () => switchView(b.dataset.view)));
+$$(".nav-item, .rail-btn").forEach((b) => b.addEventListener("click", () => switchView(b.dataset.view)));
 $("#open-drawer")?.addEventListener("click", () => $("#sidebar").classList.add("open"));
 $("#close-drawer")?.addEventListener("click", () => $("#sidebar").classList.remove("open"));
 
@@ -295,13 +438,17 @@ async function loadOverview() {
   (data.logs || []).forEach(appendLogLine);
 }
 
-$$("#switchboard .toggle").forEach((btn) => {
+$$("#switchboard .m3-switch").forEach((btn) => {
   btn.addEventListener("click", async () => {
     const key = btn.dataset.toggle;
     const next = btn.getAttribute("aria-pressed") !== "true";
-    const res = await api("/api/v1/toggles", { method: "POST", body: { key, value: next } });
-    applyToggles(res.toggles);
-    toast(`${key} ${next ? "enabled" : "disabled"}`);
+    try {
+      const res = await api("/api/v1/toggles", { method: "POST", body: { key, value: next } });
+      applyToggles(res.toggles);
+      toast(`${key} ${next ? "enabled" : "disabled"}`);
+    } catch (err) {
+      toast(err.message);
+    }
   });
 });
 
@@ -312,7 +459,39 @@ $("#btn-save-prefix")?.addEventListener("click", async () => {
   toast(`Prefix updated to ${val}`);
 });
 
-// ── Presence & Spoofer ────────────────────────────────────
+// ── Presence Studio & Spoofer ─────────────────────────────
+$$("#status-mode-seg button").forEach((b) => {
+  b.addEventListener("click", async () => {
+    $$("#status-mode-seg button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    await api("/api/v1/presence/status", { method: "POST", body: { status: b.dataset.statusMode } });
+    toast(`Status set to ${b.dataset.statusMode}`);
+  });
+});
+
+$$("#activity-kind-seg button").forEach((b) => {
+  b.addEventListener("click", () => {
+    $$("#activity-kind-seg button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    selectedActivityKind = b.dataset.actKind;
+  });
+});
+
+$("#btn-act-apply")?.addEventListener("click", async () => {
+  const title = $("#act-title").value.trim();
+  const extra = $("#act-extra").value.trim();
+  const body = { kind: selectedActivityKind, title };
+  if (selectedActivityKind === "globe") body.elapsed = extra;
+  else if (selectedActivityKind === "streaming") body.url = extra;
+  await api("/api/v1/presence/activity", { method: "POST", body });
+  toast(`Activity updated (${selectedActivityKind})`);
+});
+
+$("#btn-act-clear")?.addEventListener("click", async () => {
+  await api("/api/v1/presence/activity", { method: "POST", body: { kind: "clear" } });
+  toast("Rich presence cleared");
+});
+
 $("#btn-cs-apply")?.addEventListener("click", async () => {
   await api("/api/v1/presence/custom", { method: "POST", body: { text: $("#cs-input").value } });
   toast("Custom status updated");
@@ -325,6 +504,8 @@ $("#btn-bio-apply")?.addEventListener("click", async () => {
 
 $$("#hypesquad-seg button").forEach((b) => {
   b.addEventListener("click", async () => {
+    $$("#hypesquad-seg button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
     await api("/api/v1/presence/hypesquad", { method: "POST", body: { house: b.dataset.house } });
     toast(`HypeSquad: ${b.dataset.house}`);
   });
@@ -357,13 +538,14 @@ $("#btn-spoof-stop")?.addEventListener("click", async () => {
   toast("Stopping spoofer");
 });
 
-// ── Intelligence ──────────────────────────────────────────
+// ── Intelligence, Vanity & OSINT ──────────────────────────
 async function loadIntel() {
-  const [sn, rd, kw, st] = await Promise.all([
+  const [sn, rd, kw, st, vn] = await Promise.all([
     api(`/api/v1/intel/snipes?q=${encodeURIComponent($("#snipe-search").value.trim())}`),
     api("/api/v1/intel/radar"),
     api("/api/v1/intel/keywords"),
     api("/api/v1/intel/stalk"),
+    api("/api/v1/intel/vanity"),
   ]);
 
   $("#snipes-list").innerHTML = sn.snipes.length
@@ -383,6 +565,8 @@ async function loadIntel() {
   $("#stalk-logs").innerHTML = st.logs.length
     ? st.logs.map((l) => `<div class="data-row"><div class="data-main"><div class="data-title">${esc(l.user)}</div><div class="muted">${esc(l.detail)}</div></div></div>`).join("")
     : `<div class="muted">Tracking ${st.targets.length} target(s).</div>`;
+
+  $("#vanity-badge").textContent = vn.running ? `Armed: ${vn.target}` : "Standby";
 }
 
 $("#btn-snipe-search")?.addEventListener("click", loadIntel);
@@ -400,6 +584,30 @@ $("#btn-kw-add")?.addEventListener("click", async () => {
 $("#btn-webhook-save")?.addEventListener("click", async () => {
   await api("/api/v1/intel/webhook", { method: "POST", body: { url: $("#webhook-input").value.trim() } });
   toast("Alert webhook updated");
+});
+$("#btn-vanity-start")?.addEventListener("click", async () => {
+  const code = $("#vanity-code").value.trim();
+  if (!code) return toast("Enter invite code");
+  await api("/api/v1/intel/vanity", { method: "POST", body: { code, guild_id: $("#vanity-guild").value.trim() } });
+  toast(`Vanity watch armed: ${code}`);
+  loadIntel();
+});
+$("#btn-vanity-stop")?.addEventListener("click", async () => {
+  await api("/api/v1/intel/vanity", { method: "DELETE" });
+  toast("Vanity watch disarmed");
+  loadIntel();
+});
+$("#btn-osint-run")?.addEventListener("click", async () => {
+  const kind = $("#osint-kind").value;
+  const target = $("#osint-target").value.trim();
+  if (!target) return toast("Enter target");
+  $("#osint-output").textContent = "Querying...";
+  try {
+    const res = await api("/api/v1/tools/inspect", { method: "POST", body: { kind, target } });
+    $("#osint-output").textContent = JSON.stringify(res.result, null, 2);
+  } catch (err) {
+    $("#osint-output").textContent = `Error: ${err.message}`;
+  }
 });
 $("#btn-stalk-add")?.addEventListener("click", async () => {
   await api("/api/v1/intel/stalk", { method: "POST", body: { action: "add", user_id: $("#stalk-uid").value.trim() } });
@@ -440,9 +648,9 @@ async function loadGuilds() {
         <div class="muted mono">${esc(g.id)} · ${g.member_count} members · ${g.roles_count} roles</div>
       </div>
       <div class="inline-actions">
-        <button class="btn-secondary" data-audit="${esc(g.id)}">Audit</button>
-        <a class="btn-ghost" href="/api/v1/guilds/${esc(g.id)}/backup" style="text-decoration:none;padding:0.45rem 0.75rem;border:1px solid var(--border);border-radius:8px;font-size:var(--text-sm);">Backup</a>
-        <button class="${g.locked ? "btn-primary" : "btn-danger"}" data-lock="${esc(g.id)}" data-state="${g.locked ? "unlock" : "lock"}">${g.locked ? "Unlock" : "Lockdown"}</button>
+        <button class="btn-tonal" data-audit="${esc(g.id)}">Audit</button>
+        <a class="m3-pill-btn" href="/api/v1/guilds/${esc(g.id)}/backup" style="text-decoration:none;">Backup</a>
+        <button class="${g.locked ? "btn-expressive" : "btn-danger-tonal"}" data-lock="${esc(g.id)}" data-state="${g.locked ? "unlock" : "lock"}">${g.locked ? "Unlock" : "Lockdown"}</button>
       </div>
     </div>`).join("");
 
@@ -477,23 +685,31 @@ $("#btn-vc-follow")?.addEventListener("click", async () => {
   toast("Voice follow updated");
 });
 
-// ── DMs & Bookmarks ───────────────────────────────────────
+// ── DMs, Dispatch & Bookmarks ─────────────────────────────
 async function loadDMs() {
   const [dmRes, bmRes] = await Promise.all([
     api("/api/v1/dms"),
     api(`/api/v1/bookmarks?tag=${encodeURIComponent($("#bm-filter").value.trim())}`),
   ]);
-  $("#dms-list").innerHTML = dmRes.dms.map((d) => `
+  $("#dms-list").innerHTML = dmRes.dms.length
+    ? dmRes.dms.map((d) => `
     <div class="data-row">
       <div class="data-main">
         <div class="data-title">${esc(d.recipient)}</div>
         <div class="muted mono">${esc(d.id)}</div>
       </div>
       <div class="inline-actions">
-        <a class="btn-secondary" href="/api/v1/dms/${esc(d.id)}/export" style="text-decoration:none;padding:0.45rem 0.75rem;border:1px solid var(--border);border-radius:8px;font-size:var(--text-sm);">Export</a>
-        <button class="btn-danger" data-wipedm="${esc(d.id)}" data-name="${esc(d.recipient)}">Wipe mine</button>
+        <button class="btn-ghost-sm" data-use-dm="${esc(d.id)}">Dispatch</button>
+        <a class="m3-pill-btn" href="/api/v1/dms/${esc(d.id)}/export" style="text-decoration:none;">Export</a>
+        <button class="btn-danger-tonal" data-wipedm="${esc(d.id)}" data-name="${esc(d.recipient)}">Wipe</button>
       </div>
-    </div>`).join("");
+    </div>`).join("")
+    : `<div class="muted">No open DM channels cached.</div>`;
+
+  $$("[data-use-dm]").forEach((b) => b.addEventListener("click", () => {
+    $("#dispatch-channel").value = b.dataset.useDm;
+    $("#dispatch-content").focus();
+  }));
 
   $$("[data-wipedm]").forEach((b) => b.addEventListener("click", async () => {
     if (!confirm(`Delete all self-authored messages in DM with ${b.dataset.name}?`)) return;
@@ -508,7 +724,7 @@ async function loadDMs() {
           <div class="data-title">[${esc(bm.tag)}] ${esc(bm.author_name)}</div>
           <div class="muted">${esc(bm.content)}</div>
         </div>
-        <button class="btn-ghost" data-delbm="${bm.id}">Delete</button>
+        <button class="btn-ghost-sm" data-delbm="${bm.id}">Delete</button>
       </div>`).join("")
     : `<div class="muted">No saved bookmarks.</div>`;
 
@@ -518,6 +734,14 @@ async function loadDMs() {
   }));
 }
 
+$("#btn-dispatch-send")?.addEventListener("click", async () => {
+  const channel_id = $("#dispatch-channel").value.trim();
+  const content = $("#dispatch-content").value.trim();
+  if (!channel_id || !content) return toast("Channel ID and content required");
+  await api("/api/v1/dispatch/send", { method: "POST", body: { channel_id, content } });
+  $("#dispatch-content").value = "";
+  toast("Message dispatched");
+});
 $("#btn-bm-filter")?.addEventListener("click", loadDMs);
 $("#btn-accept-friends")?.addEventListener("click", async () => {
   const r = await api("/api/v1/intel/friends", { method: "POST", body: { action: "accept" } });
@@ -535,7 +759,7 @@ async function loadSchedules() {
     ? r.schedules.map((s) => `
       <div class="data-row">
         <div class="data-main"><div class="data-title">#${s.id} · every ${esc(s.interval)}</div><div class="muted">${esc(s.channel)}: ${esc(s.text)}</div></div>
-        <button class="btn-danger" data-delsch="${s.id}">Cancel</button>
+        <button class="btn-danger-tonal" data-delsch="${s.id}">Cancel</button>
       </div>`).join("")
     : `<div class="muted">No active recurring schedules.</div>`;
   $$("[data-delsch]").forEach((b) => b.addEventListener("click", async () => {
@@ -567,11 +791,14 @@ $("#btn-revoke-all")?.addEventListener("click", async () => {
 // ── Cmd+K Command Palette ─────────────────────────────────
 const PALETTE_ACTIONS = [
   { label: "Go to Overview", run: () => switchView("overview") },
-  { label: "Go to Presence & Spoofer", run: () => switchView("presence") },
-  { label: "Go to Intelligence", run: () => switchView("intel") },
+  { label: "Go to Presence Studio", run: () => switchView("presence") },
+  { label: "Go to Intelligence & OSINT", run: () => switchView("intel") },
   { label: "Go to Servers & Voice", run: () => switchView("servers") },
-  { label: "Go to DMs & Vault", run: () => switchView("dms") },
+  { label: "Go to DMs & Dispatch", run: () => switchView("dms") },
   { label: "Go to System & Jobs", run: () => switchView("system") },
+  { label: "Set Online Mode: DND", run: () => api("/api/v1/presence/status", { method: "POST", body: { status: "dnd" } }).then(() => toast("Status: DND")) },
+  { label: "Set Online Mode: Online", run: () => api("/api/v1/presence/status", { method: "POST", body: { status: "online" } }).then(() => toast("Status: Online")) },
+  { label: "Set Online Mode: Invisible", run: () => api("/api/v1/presence/status", { method: "POST", body: { status: "invisible" } }).then(() => toast("Status: Invisible")) },
   { label: "Hot-update from GitHub", run: () => $("#btn-sys-update").click() },
   { label: "Disconnect Voice", run: () => $("#btn-vc-leave").click() },
 ];
@@ -599,7 +826,7 @@ $("#cmdk-dialog")?.addEventListener("click", (e) => {
 window.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
     e.preventDefault();
-    if (!$("#workspace").classList.contains("hidden")) openCmdk();
+    openCmdk();
   }
 });
 

@@ -6,47 +6,67 @@
   <title>Globe — Control Plane</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/animejs@3.2.2/lib/anime.min.js" defer></script>
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
+  <div class="ambient-grain" aria-hidden="true"></div>
+
   <!-- Auth Gate -->
   <section id="auth-gate" class="auth-gate hidden" aria-label="Sign in">
     <div class="auth-visual">
       <canvas id="globe-canvas" aria-hidden="true"></canvas>
+      <div class="auth-visual-top">
+        <div class="brand-lockup">
+          <svg class="m3-morph-badge" viewBox="0 0 100 100" aria-hidden="true">
+            <path id="auth-morph-path" d="" />
+          </svg>
+          <span class="wordmark">Globe</span>
+        </div>
+        <div class="live-chip">
+          <span class="pulse-ring"></span>
+          <span>Runtime v3.1</span>
+        </div>
+      </div>
+
       <div class="auth-visual-inner">
-        <div class="wordmark">Globe</div>
-        <h1 class="auth-headline">Autonomous client runtime, controlled from one surface.</h1>
-        <p class="auth-sub">Zero-trust token authentication verified directly against active volatile memory. All controls execute inside the live gateway loop.</p>
+        <h1 class="auth-headline">Every cog.<br />One tactile surface.</h1>
+        <p class="auth-sub">Direct in-memory control verified against your active Discord token. Zero intermediaries, sub-frame WebSocket push telemetry.</p>
         <dl class="auth-specs">
-          <div><dt>Transport</dt><dd class="mono">TLS / WebSocket Push</dd></div>
-          <div><dt>Vault Cipher</dt><dd class="mono">AES-256-GCM · 480k</dd></div>
-          <div><dt>Session Guard</dt><dd class="mono">HMAC-SHA256 · CSRF</dd></div>
+          <div class="spec-tile"><dt>Transport</dt><dd class="mono">TLS · WS Push</dd></div>
+          <div class="spec-tile"><dt>Vault Cipher</dt><dd class="mono">AES-256-GCM</dd></div>
+          <div class="spec-tile"><dt>Session Guard</dt><dd class="mono">HMAC · CSRF</dd></div>
         </dl>
       </div>
     </div>
 
     <div class="auth-panel">
-      <form id="login-form" class="login-card" autocomplete="off">
-        <h2>Authenticate session</h2>
-        <p class="muted">Enter your Discord account token to unlock the control plane.</p>
+      <form id="login-form" class="login-card bento-surface" autocomplete="off">
+        <div class="login-head">
+          <h2>Unlock control plane</h2>
+          <p class="muted">Authenticate with your active Discord account token.</p>
+        </div>
 
         <div class="field">
-          <label for="token-input">Discord account token</label>
+          <label for="token-input">Account token</label>
           <div class="input-group">
-            <input id="token-input" name="token" type="password" placeholder="Paste account token" required spellcheck="false" autocomplete="off" />
-            <button type="button" id="toggle-token-vis" class="icon-btn" aria-label="Show token">Show</button>
+            <input id="token-input" name="token" type="password" placeholder="Paste Discord token" required spellcheck="false" autocomplete="off" />
+            <button type="button" id="toggle-token-vis" class="m3-pill-btn" aria-label="Show token">Show</button>
           </div>
         </div>
 
         <label class="check-row">
           <input id="remember-input" type="checkbox" checked />
-          <span>Keep session active for 7 days</span>
+          <span>Keep signed in for 7 days</span>
         </label>
 
         <div id="login-error" class="error-banner hidden" role="alert"></div>
 
-        <button type="submit" id="login-submit" class="btn-primary">Sign in to Globe</button>
+        <button type="submit" id="login-submit" class="btn-expressive full-w">
+          <span>Enter workspace</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </button>
       </form>
     </div>
   </section>
@@ -55,44 +75,69 @@
   <div id="workspace" class="workspace hidden">
     <aside id="sidebar" class="sidebar" aria-label="Primary navigation">
       <div class="sidebar-head">
-        <span class="wordmark">Globe</span>
-        <button id="close-drawer" class="icon-btn mobile-only" aria-label="Close navigation">Close</button>
+        <div class="brand-lockup">
+          <svg class="m3-morph-badge sm" viewBox="0 0 100 100" aria-hidden="true">
+            <path id="nav-morph-path" d="" />
+          </svg>
+          <span class="wordmark">Globe</span>
+        </div>
+        <button id="close-drawer" class="m3-pill-btn mobile-only" aria-label="Close navigation">Close</button>
       </div>
 
       <nav class="nav-list" id="nav-list">
-        <button class="nav-item active" data-view="overview">Overview</button>
-        <button class="nav-item" data-view="presence">Presence &amp; Spoofer</button>
-        <button class="nav-item" data-view="intel">Intelligence</button>
-        <button class="nav-item" data-view="servers">Servers &amp; Voice</button>
-        <button class="nav-item" data-view="dms">DMs &amp; Vault</button>
-        <button class="nav-item" data-view="system">System &amp; Jobs</button>
+        <button class="nav-item active" data-view="overview">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg>
+          <span>Overview</span>
+        </button>
+        <button class="nav-item" data-view="presence">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+          <span>Presence Studio</span>
+        </button>
+        <button class="nav-item" data-view="intel">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <span>Intelligence &amp; OSINT</span>
+        </button>
+        <button class="nav-item" data-view="servers">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+          <span>Servers &amp; Voice</span>
+        </button>
+        <button class="nav-item" data-view="dms">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>DMs &amp; Dispatch</span>
+        </button>
+        <button class="nav-item" data-view="system">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>System &amp; Jobs</span>
+        </button>
       </nav>
 
       <div class="sidebar-foot">
-        <div class="account-strip">
+        <div class="account-strip bento-surface">
           <img id="acct-avatar" class="avatar" src="" alt="" />
           <div class="account-meta">
             <div id="acct-name" class="acct-name">—</div>
             <div id="acct-mask" class="mono muted">—</div>
           </div>
         </div>
-        <button id="btn-logout" class="btn-ghost full-w">Sign out</button>
+        <button id="btn-logout" class="btn-tonal full-w">Sign out</button>
       </div>
     </aside>
 
     <div class="main-col">
       <header class="topbar">
         <div class="topbar-left">
-          <button id="open-drawer" class="icon-btn mobile-only" aria-label="Open menu">Menu</button>
-          <span id="view-title" class="view-title">Overview</span>
+          <button id="open-drawer" class="m3-pill-btn mobile-only" aria-label="Open menu">Menu</button>
+          <h1 id="view-title" class="view-title">Overview</h1>
         </div>
+
         <div class="topbar-right">
-          <span class="ws-indicator">
+          <div id="dynamic-pill" class="dynamic-pill">
             <span id="ws-dot" class="status-dot"></span>
             <span id="ws-label" class="mono">Connecting</span>
-          </span>
+            <span id="pill-extra" class="pill-extra mono"></span>
+          </div>
           <button id="btn-cmdk" class="cmdk-trigger" title="Open Command Palette">
-            <span class="cmdk-label">Quick actions</span>
+            <span class="cmdk-label">Actions</span>
             <kbd class="mono">⌘K</kbd>
           </button>
         </div>
@@ -101,30 +146,44 @@
       <main class="content-area">
         <!-- View: Overview -->
         <section id="view-overview" class="view active">
-          <div class="metrics-strip">
-            <div class="metric-cell">
-              <div class="metric-label">Gateway latency</div>
+          <div class="bento-metrics">
+            <div class="metric-tile bento-surface stagger-item">
+              <div class="metric-top">
+                <span class="metric-label">Gateway ping</span>
+                <span class="m3-shape-tag scircle" aria-hidden="true"></span>
+              </div>
               <div id="m-latency" class="metric-val mono">— ms</div>
             </div>
-            <div class="metric-cell">
-              <div class="metric-label">Process uptime</div>
+            <div class="metric-tile bento-surface stagger-item">
+              <div class="metric-top">
+                <span class="metric-label">Runtime uptime</span>
+                <span class="m3-shape-tag clover" aria-hidden="true"></span>
+              </div>
               <div id="m-uptime" class="metric-val mono">—</div>
             </div>
-            <div class="metric-cell">
-              <div class="metric-label">Servers / Friends</div>
+            <div class="metric-tile bento-surface stagger-item">
+              <div class="metric-top">
+                <span class="metric-label">Servers / Friends</span>
+                <span class="m3-shape-tag burst" aria-hidden="true"></span>
+              </div>
               <div id="m-reach" class="metric-val mono">—</div>
             </div>
-            <div class="metric-cell">
-              <div class="metric-label">Telemetry store</div>
+            <div class="metric-tile bento-surface stagger-item">
+              <div class="metric-top">
+                <span class="metric-label">SQLite store</span>
+                <span class="m3-shape-tag pill" aria-hidden="true"></span>
+              </div>
               <div id="m-db" class="metric-val mono">— KB</div>
             </div>
           </div>
 
-          <div class="split-row">
-            <div class="panel-block">
+          <div class="bento-split">
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
-                <h2>Live switchboard</h2>
-                <span class="muted">Direct in-memory control</span>
+                <div>
+                  <h2>Live switchboard</h2>
+                  <p class="muted">In-memory module flags synced in real time</p>
+                </div>
               </div>
               <div class="switch-list" id="switchboard">
                 <div class="switch-row">
@@ -132,104 +191,128 @@
                     <div class="switch-title">No-prefix commands</div>
                     <div class="muted">Trigger commands directly without prefix</div>
                   </div>
-                  <button class="toggle" data-toggle="no_prefix" aria-pressed="false"></button>
+                  <button class="m3-switch" data-toggle="no_prefix" aria-pressed="false"><span class="m3-thumb"></span></button>
                 </div>
                 <div class="switch-row">
                   <div>
                     <div class="switch-title">DM privacy wipe</div>
-                    <div class="muted">Auto-delete DM messages when seen by recipient</div>
+                    <div class="muted">Auto-delete DM messages when read</div>
                   </div>
-                  <button class="toggle" data-toggle="privacy" aria-pressed="false"></button>
+                  <button class="m3-switch" data-toggle="privacy" aria-pressed="false"><span class="m3-thumb"></span></button>
                 </div>
                 <div class="switch-row">
                   <div>
                     <div class="switch-title">Giveaway sniper</div>
                     <div class="muted">Human-jitter button &amp; reaction entry</div>
                   </div>
-                  <button class="toggle" data-toggle="gsniper" aria-pressed="false"></button>
+                  <button class="m3-switch" data-toggle="gsniper" aria-pressed="false"><span class="m3-thumb"></span></button>
                 </div>
                 <div class="switch-row">
                   <div>
                     <div class="switch-title">Nitro sniper</div>
-                    <div class="muted">Instant gift link detection &amp; redemption</div>
+                    <div class="muted">Instant gift link detection &amp; claim</div>
                   </div>
-                  <button class="toggle" data-toggle="nitro_sniper" aria-pressed="false"></button>
+                  <button class="m3-switch" data-toggle="nitro_sniper" aria-pressed="false"><span class="m3-thumb"></span></button>
                 </div>
                 <div class="switch-row">
                   <div>
                     <div class="switch-title">Smart AFK mode</div>
-                    <div class="muted">5m cooldown auto-reply &amp; missed-ping digest</div>
+                    <div class="muted">5m cooldown auto-reply &amp; ping digest</div>
                   </div>
-                  <button class="toggle" data-toggle="afk" aria-pressed="false"></button>
+                  <button class="m3-switch" data-toggle="afk" aria-pressed="false"><span class="m3-thumb"></span></button>
                 </div>
                 <div class="switch-row">
                   <div>
                     <div class="switch-title">Startup Globe RPC</div>
-                    <div class="muted">Keep Rich Presence active while preserving custom status</div>
+                    <div class="muted">Keep Rich Presence while guarding custom status</div>
                   </div>
-                  <button class="toggle" data-toggle="startup_rpc" aria-pressed="false"></button>
+                  <button class="m3-switch" data-toggle="startup_rpc" aria-pressed="false"><span class="m3-thumb"></span></button>
                 </div>
               </div>
             </div>
 
-            <div class="panel-block">
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
-                <h2>Latency telemetry</h2>
-                <span class="mono muted" id="spark-latest">— ms</span>
+                <div>
+                  <h2>Latency telemetry</h2>
+                  <p class="muted">4s WebSocket heartbeat trace</p>
+                </div>
+                <span class="mono mint-chip" id="spark-latest">— ms</span>
               </div>
               <div class="spark-wrap">
-                <svg id="latency-spark" viewBox="0 0 420 120" preserveAspectRatio="none" aria-label="Latency chart">
-                  <line x1="0" y1="40" x2="420" y2="40" class="spark-grid" />
-                  <line x1="0" y1="80" x2="420" y2="80" class="spark-grid" />
+                <svg id="latency-spark" viewBox="0 0 420 130" preserveAspectRatio="none" aria-label="Latency chart">
+                  <defs>
+                    <linearGradient id="spark-grad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#4ade80" stop-opacity="0.32" />
+                      <stop offset="100%" stop-color="#4ade80" stop-opacity="0.0" />
+                    </linearGradient>
+                  </defs>
+                  <line x1="0" y1="42" x2="420" y2="42" class="spark-grid" />
+                  <line x1="0" y1="86" x2="420" y2="86" class="spark-grid" />
                   <path id="spark-area" class="spark-area" d="" />
                   <path id="spark-line" class="spark-line" d="" />
-                  <circle id="spark-dot" class="spark-dot" cx="0" cy="60" r="3.5" />
+                  <circle id="spark-dot-halo" class="spark-dot-halo" cx="0" cy="65" r="8" />
+                  <circle id="spark-dot" class="spark-dot" cx="0" cy="65" r="3.5" />
                 </svg>
               </div>
               <div class="field">
                 <label for="prefix-input">Command prefix</label>
                 <div class="inline-form">
                   <input id="prefix-input" type="text" placeholder="Command prefix (e.g. g.)" maxlength="8" />
-                  <button id="btn-save-prefix" class="btn-secondary">Update prefix</button>
+                  <button id="btn-save-prefix" class="btn-tonal">Save prefix</button>
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="panel-block">
+          <div class="bento-card bento-surface stagger-item">
             <div class="block-head">
-              <h2>Runtime event stream</h2>
-              <span class="muted">Live gateway &amp; command feed</span>
+              <div>
+                <h2>Runtime event stream</h2>
+                <p class="muted">Live gateway telemetry &amp; command audit</p>
+              </div>
             </div>
             <div id="log-stream" class="log-stream mono" aria-live="polite"></div>
           </div>
         </section>
 
-        <!-- View: Presence & Spoofer -->
+        <!-- View: Presence Studio -->
         <section id="view-presence" class="view">
-          <div class="split-row">
-            <div class="panel-block">
+          <div class="bento-split">
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
-                <h2>Profile &amp; custom status</h2>
+                <div>
+                  <h2>Status &amp; profile</h2>
+                  <p class="muted">Online state, custom status, bio, and HypeSquad</p>
+                </div>
               </div>
               <div class="stack-form">
+                <div class="field">
+                  <label>Online mode</label>
+                  <div class="m3-seg" id="status-mode-seg">
+                    <button type="button" data-status-mode="online"><span class="mode-dot online"></span>Online</button>
+                    <button type="button" data-status-mode="idle"><span class="mode-dot idle"></span>Idle</button>
+                    <button type="button" data-status-mode="dnd"><span class="mode-dot dnd"></span>DND</button>
+                    <button type="button" data-status-mode="invisible"><span class="mode-dot offline"></span>Invisible</button>
+                  </div>
+                </div>
                 <div class="field">
                   <label for="cs-input">Custom status text</label>
                   <div class="inline-form">
                     <input id="cs-input" type="text" placeholder="Leave empty to clear custom status" maxlength="128" />
-                    <button id="btn-cs-apply" class="btn-primary">Apply</button>
+                    <button id="btn-cs-apply" class="btn-expressive">Apply</button>
                   </div>
                 </div>
                 <div class="field">
                   <label for="bio-input">Account bio</label>
                   <div class="inline-form">
                     <input id="bio-input" type="text" placeholder="Up to 190 characters" maxlength="190" />
-                    <button id="btn-bio-apply" class="btn-secondary">Save bio</button>
+                    <button id="btn-bio-apply" class="btn-tonal">Save bio</button>
                   </div>
                 </div>
                 <div class="field">
                   <label>HypeSquad House</label>
-                  <div class="segmented" id="hypesquad-seg">
+                  <div class="m3-seg" id="hypesquad-seg">
                     <button type="button" data-house="bravery">Bravery</button>
                     <button type="button" data-house="brilliance">Brilliance</button>
                     <button type="button" data-house="balance">Balance</button>
@@ -239,29 +322,60 @@
               </div>
             </div>
 
-            <div class="panel-block">
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
-                <h2>Status rotator</h2>
-                <button id="btn-rotate-stop" class="btn-ghost">Stop rotator</button>
+                <div>
+                  <h2>Rich activity studio</h2>
+                  <p class="muted">Playing, Streaming, Listening, Watching, or Globe RPC</p>
+                </div>
               </div>
               <div class="stack-form">
+                <div class="m3-seg" id="activity-kind-seg">
+                  <button type="button" class="active" data-act-kind="globe">Globe RPC</button>
+                  <button type="button" data-act-kind="playing">Playing</button>
+                  <button type="button" data-act-kind="streaming">Streaming</button>
+                  <button type="button" data-act-kind="listening">Listening</button>
+                  <button type="button" data-act-kind="watching">Watching</button>
+                </div>
+                <div class="spoofer-grid two-col">
+                  <div class="field">
+                    <label for="act-title">Activity name</label>
+                    <input id="act-title" type="text" placeholder="e.g. Valorant / Spotify" maxlength="128" />
+                  </div>
+                  <div class="field">
+                    <label for="act-extra">Elapsed timer or Stream URL</label>
+                    <input id="act-extra" type="text" placeholder="00:16:01 / 2h / https://twitch.tv/..." />
+                  </div>
+                </div>
+                <div class="inline-actions">
+                  <button id="btn-act-apply" class="btn-expressive">Broadcast activity</button>
+                  <button id="btn-act-clear" class="btn-danger-tonal">Clear activity</button>
+                </div>
+                <div class="divider"></div>
+                <div class="block-head">
+                  <h3>Status rotator</h3>
+                  <button id="btn-rotate-stop" class="btn-ghost-sm">Stop rotator</button>
+                </div>
                 <div class="field">
                   <label for="rotate-interval">Slide interval (seconds)</label>
                   <input id="rotate-interval" type="number" min="5" max="300" value="15" />
                 </div>
                 <div class="field">
                   <label for="rotate-slides">Slides (one per line)</label>
-                  <textarea id="rotate-slides" rows="4" placeholder="Shipping updates&#10;AFK · Back soon"></textarea>
+                  <textarea id="rotate-slides" rows="3" placeholder="Shipping updates&#10;AFK · Back soon"></textarea>
                 </div>
-                <button id="btn-rotate-start" class="btn-primary">Start status rotator</button>
+                <button id="btn-rotate-start" class="btn-tonal">Start status rotator</button>
               </div>
             </div>
           </div>
 
-          <div class="panel-block">
+          <div class="bento-card bento-surface stagger-item">
             <div class="block-head">
-              <h2>Game variety badge spoofer</h2>
-              <span id="spoofer-status" class="mono muted">Idle</span>
+              <div>
+                <h2>Game variety badge spoofer</h2>
+                <p class="muted">Rotates detectable titles to cultivate Discord game badges</p>
+              </div>
+              <span id="spoofer-status" class="mono mint-chip">Idle</span>
             </div>
             <div class="spoofer-grid">
               <div class="field">
@@ -273,66 +387,119 @@
                 <input id="spoof-interval" type="number" min="3" max="30" value="6" />
               </div>
               <div class="spoofer-actions">
-                <button id="btn-spoof-start" class="btn-primary">Launch spoofer</button>
-                <button id="btn-spoof-stop" class="btn-danger">Stop</button>
+                <button id="btn-spoof-start" class="btn-expressive">Launch spoofer</button>
+                <button id="btn-spoof-stop" class="btn-danger-tonal">Stop</button>
               </div>
             </div>
-            <div id="spoofer-bar-wrap" class="progress-wrap hidden">
-              <div id="spoofer-bar" class="progress-fill"></div>
+            <div id="spoofer-bar-wrap" class="wavy-progress-wrap hidden">
+              <div class="wavy-track">
+                <div id="spoofer-bar" class="wavy-fill"></div>
+              </div>
             </div>
           </div>
         </section>
 
-        <!-- View: Intelligence -->
+        <!-- View: Intelligence & OSINT -->
         <section id="view-intel" class="view">
-          <div class="split-row">
-            <div class="panel-block">
+          <div class="bento-split">
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
-                <h2>Snipe forensics (last 500)</h2>
+                <h2>Snipe forensics</h2>
                 <div class="inline-form compact">
                   <input id="snipe-search" type="search" placeholder="Search content or user" />
-                  <button id="btn-snipe-search" class="btn-secondary">Search</button>
+                  <button id="btn-snipe-search" class="btn-tonal">Search</button>
                 </div>
               </div>
               <div id="snipes-list" class="data-list"></div>
             </div>
 
-            <div class="panel-block">
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
                 <h2>Ghost-ping radar</h2>
-                <button id="btn-radar-clear" class="btn-ghost">Clear</button>
+                <button id="btn-radar-clear" class="btn-ghost-sm">Clear</button>
               </div>
               <div id="radar-list" class="data-list"></div>
             </div>
           </div>
 
-          <div class="split-row">
-            <div class="panel-block">
+          <div class="bento-split">
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
-                <h2>Keyword sniper &amp; alert webhook</h2>
+                <div>
+                  <h2>Vanity URL sniper</h2>
+                  <p class="muted">Poll invite endpoint and optionally claim on drop</p>
+                </div>
+                <span id="vanity-badge" class="mono muted">Standby</span>
               </div>
               <div class="stack-form">
-                <div class="inline-form">
-                  <input id="kw-input" type="text" placeholder="Add watched keyword" />
-                  <button id="btn-kw-add" class="btn-primary">Add</button>
+                <div class="spoofer-grid two-col">
+                  <div class="field">
+                    <label for="vanity-code">Invite code</label>
+                    <input id="vanity-code" type="text" placeholder="e.g. globe" />
+                  </div>
+                  <div class="field">
+                    <label for="vanity-guild">Claim Guild ID (optional)</label>
+                    <input id="vanity-guild" type="text" placeholder="Guild ID" class="mono" />
+                  </div>
                 </div>
-                <div id="kw-list" class="token-list"></div>
-                <div class="inline-form">
-                  <input id="webhook-input" type="url" placeholder="Private alert webhook URL (https://...)" />
-                  <button id="btn-webhook-save" class="btn-secondary">Save hook</button>
+                <div class="inline-actions">
+                  <button id="btn-vanity-start" class="btn-expressive">Arm vanity watch</button>
+                  <button id="btn-vanity-stop" class="btn-danger-tonal">Disarm</button>
                 </div>
               </div>
             </div>
 
-            <div class="panel-block">
+            <div class="bento-card bento-surface stagger-item">
+              <div class="block-head">
+                <div>
+                  <h2>OSINT &amp; net inspector</h2>
+                  <p class="muted">IP geo, DNS records, HTTP headers, crypto, or token check</p>
+                </div>
+              </div>
+              <div class="stack-form">
+                <div class="inline-form">
+                  <select id="osint-kind">
+                    <option value="ip">IP Geo</option>
+                    <option value="dns">DNS Resolve</option>
+                    <option value="headers">HTTP Headers</option>
+                    <option value="crypto">Crypto Ticker</option>
+                    <option value="token">Token Check</option>
+                  </select>
+                  <input id="osint-target" type="text" placeholder="1.1.1.1 / example.com / sol" />
+                  <button id="btn-osint-run" class="btn-expressive">Inspect</button>
+                </div>
+                <pre id="osint-output" class="osint-pre mono">Ready for lookup.</pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="bento-split">
+            <div class="bento-card bento-surface stagger-item">
+              <div class="block-head">
+                <h2>Keyword sniper &amp; alert hook</h2>
+              </div>
+              <div class="stack-form">
+                <div class="inline-form">
+                  <input id="kw-input" type="text" placeholder="Add watched keyword" />
+                  <button id="btn-kw-add" class="btn-expressive">Add</button>
+                </div>
+                <div id="kw-list" class="token-list"></div>
+                <div class="inline-form">
+                  <input id="webhook-input" type="url" placeholder="Private alert webhook URL (https://...)" />
+                  <button id="btn-webhook-save" class="btn-tonal">Save hook</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
                 <h2>User stalker &amp; lookup</h2>
               </div>
               <div class="stack-form">
                 <div class="inline-form">
                   <input id="stalk-uid" type="text" placeholder="Discord User ID" class="mono" />
-                  <button id="btn-stalk-add" class="btn-secondary">Stalk</button>
-                  <button id="btn-profile-user" class="btn-primary">Profile</button>
+                  <button id="btn-stalk-add" class="btn-tonal">Stalk</button>
+                  <button id="btn-profile-user" class="btn-expressive">Profile</button>
                 </div>
                 <div id="profile-output" class="data-list"></div>
                 <div id="stalk-logs" class="data-list"></div>
@@ -340,12 +507,12 @@
             </div>
           </div>
 
-          <div class="panel-block">
+          <div class="bento-card bento-surface stagger-item">
             <div class="block-head">
               <h2>Unfriend &amp; relationship diff</h2>
               <div class="inline-actions">
-                <button id="btn-friends-backup" class="btn-secondary">Save snapshot</button>
-                <button id="btn-friends-diff" class="btn-primary">Check diff</button>
+                <button id="btn-friends-backup" class="btn-tonal">Save snapshot</button>
+                <button id="btn-friends-diff" class="btn-expressive">Check diff</button>
               </div>
             </div>
             <div id="friends-diff-out" class="data-list"></div>
@@ -354,11 +521,11 @@
 
         <!-- View: Servers & Voice -->
         <section id="view-servers" class="view">
-          <div class="split-row">
-            <div class="panel-block">
+          <div class="bento-split">
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
                 <h2>Voice control deck</h2>
-                <button id="btn-vc-leave" class="btn-danger">Disconnect</button>
+                <button id="btn-vc-leave" class="btn-danger-tonal">Disconnect</button>
               </div>
               <div class="stack-form">
                 <div class="inline-form">
@@ -368,16 +535,16 @@
                     <option value="mute">Mute only</option>
                     <option value="open">Open mic</option>
                   </select>
-                  <button id="btn-vc-join" class="btn-primary">Join 24/7</button>
+                  <button id="btn-vc-join" class="btn-expressive">Join 24/7</button>
                 </div>
                 <div class="inline-form">
                   <input id="vc-follow-uid" type="text" placeholder="Target User ID to follow (or off)" class="mono" />
-                  <button id="btn-vc-follow" class="btn-secondary">Set follow</button>
+                  <button id="btn-vc-follow" class="btn-tonal">Set follow</button>
                 </div>
               </div>
             </div>
 
-            <div class="panel-block">
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
                 <h2>Server security audit</h2>
                 <span class="muted" id="audit-title">Select a guild below</span>
@@ -386,35 +553,57 @@
             </div>
           </div>
 
-          <div class="panel-block">
+          <div class="bento-card bento-surface stagger-item">
             <div class="block-head">
               <h2>Mutual servers</h2>
-              <button id="btn-refresh-guilds" class="btn-ghost">Refresh</button>
+              <button id="btn-refresh-guilds" class="btn-ghost-sm">Refresh</button>
             </div>
             <div id="guilds-list" class="data-list"></div>
           </div>
         </section>
 
-        <!-- View: DMs & Vault -->
+        <!-- View: DMs & Dispatch -->
         <section id="view-dms" class="view">
-          <div class="split-row">
-            <div class="panel-block">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Live message dispatch</h2>
+                <p class="muted">Send a message directly to any DM or server text channel</p>
+              </div>
+            </div>
+            <div class="spoofer-grid">
+              <div class="field">
+                <label for="dispatch-channel">Target channel / DM ID</label>
+                <input id="dispatch-channel" type="text" placeholder="Channel ID (click Dispatch on any DM below)" class="mono" />
+              </div>
+              <div class="field">
+                <label for="dispatch-content">Message content</label>
+                <input id="dispatch-content" type="text" placeholder="Type message to send as your account..." maxlength="2000" />
+              </div>
+              <div class="spoofer-actions">
+                <button id="btn-dispatch-send" class="btn-expressive">Send message</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="bento-split">
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
                 <h2>Open direct messages</h2>
                 <div class="inline-actions">
-                  <button id="btn-accept-friends" class="btn-secondary">Accept requests</button>
-                  <button id="btn-clear-outgoing" class="btn-ghost">Clear outgoing</button>
+                  <button id="btn-accept-friends" class="btn-tonal">Accept requests</button>
+                  <button id="btn-clear-outgoing" class="btn-ghost-sm">Clear outgoing</button>
                 </div>
               </div>
               <div id="dms-list" class="data-list"></div>
             </div>
 
-            <div class="panel-block">
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
                 <h2>Saved bookmarks</h2>
                 <div class="inline-form compact">
                   <input id="bm-filter" type="search" placeholder="Filter tag" />
-                  <button id="btn-bm-filter" class="btn-secondary">Filter</button>
+                  <button id="btn-bm-filter" class="btn-tonal">Filter</button>
                 </div>
               </div>
               <div id="bookmarks-list" class="data-list"></div>
@@ -424,15 +613,15 @@
 
         <!-- View: System & Schedules -->
         <section id="view-system" class="view">
-          <div class="split-row">
-            <div class="panel-block">
+          <div class="bento-split">
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
                 <h2>Runtime lifecycle</h2>
               </div>
               <div class="stack-form">
                 <div class="inline-actions">
-                  <button id="btn-sys-update" class="btn-primary">Pull Git &amp; Hot-Reload</button>
-                  <button id="btn-sys-restart" class="btn-danger">Process Restart</button>
+                  <button id="btn-sys-update" class="btn-expressive">Pull Git &amp; Hot-Reload</button>
+                  <button id="btn-sys-restart" class="btn-danger-tonal">Process Restart</button>
                 </div>
                 <div class="inline-form">
                   <select id="reload-mod">
@@ -444,21 +633,21 @@
                     <option value="troll">troll</option>
                     <option value="fun">fun</option>
                   </select>
-                  <button id="btn-sys-reload" class="btn-secondary">Reload cog</button>
+                  <button id="btn-sys-reload" class="btn-tonal">Reload cog</button>
                 </div>
                 <div class="divider"></div>
                 <div>
                   <h3>Web session security</h3>
-                  <p class="muted">Rotate the HMAC-SHA256 signing secret to sign out every browser immediately.</p>
-                  <button id="btn-revoke-all" class="btn-danger">Revoke all sessions</button>
+                  <p class="muted">Rotate the HMAC-SHA256 signing secret to revoke every active browser.</p>
+                  <button id="btn-revoke-all" class="btn-danger-tonal">Revoke all sessions</button>
                 </div>
               </div>
             </div>
 
-            <div class="panel-block">
+            <div class="bento-card bento-surface stagger-item">
               <div class="block-head">
                 <h2>Active recurring schedules</h2>
-                <button id="btn-refresh-sched" class="btn-ghost">Refresh</button>
+                <button id="btn-refresh-sched" class="btn-ghost-sm">Refresh</button>
               </div>
               <div id="schedules-list" class="data-list"></div>
             </div>
@@ -466,17 +655,27 @@
         </section>
       </main>
     </div>
+
+    <!-- Mobile M3 Bottom Navigation Rail -->
+    <nav class="mobile-rail" aria-label="Quick mobile navigation">
+      <button class="rail-btn active" data-view="overview">Home</button>
+      <button class="rail-btn" data-view="presence">Presence</button>
+      <button class="rail-btn" data-view="intel">Intel</button>
+      <button class="rail-btn" data-view="servers">Servers</button>
+      <button class="rail-btn" data-view="dms">DMs</button>
+    </nav>
   </div>
 
   <!-- Cmd+K Command Palette -->
   <dialog id="cmdk-dialog" class="cmdk-dialog">
     <div class="cmdk-box">
-      <input id="cmdk-input" type="text" placeholder="Type a view, toggle, or action…" autocomplete="off" />
+      <input id="cmdk-input" type="search" placeholder="Jump to workspace, status mode, or runtime action..." autocomplete="off" />
       <div id="cmdk-results" class="cmdk-results"></div>
     </div>
   </dialog>
 
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
-  <script type="module" src="/static/app.js"></script>
+
+  <script src="/static/app.js"></script>
 </body>
 </html>
