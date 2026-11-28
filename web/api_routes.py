@@ -66,19 +66,43 @@ def _snapshot_overview(bot: Any, logs_fn: Callable[[], list[dict[str, str]]]) ->
             active_vc = {"id": str(ch.id), "name": ch.name, "guild": ch.guild.name}
             break
 
-    # Gather presence config from Status cog for frontend hydration
+    # Gather live Discord member presence + saved Status cog config for frontend hydration
+    live_me = None
+    for g in getattr(bot, "guilds", []) or []:
+        m = getattr(g, "me", None)
+        if m is not None:
+            live_me = m
+            break
+    raw_live_st = str(getattr(live_me, "status", "") or "").lower()
+    if raw_live_st == "offline":
+        raw_live_st = "invisible"
+    live_activities = []
+    for a in (getattr(live_me, "activities", []) or []):
+        aname = getattr(a, "name", "") or ""
+        if aname:
+            atype = getattr(getattr(a, "type", None), "name", "activity")
+            adet = getattr(a, "details", None) or getattr(a, "state", None) or ""
+            live_activities.append({"type": str(atype), "name": str(aname), "detail": str(adet)})
+
     presence_config = {}
     if status:
+        cfg_st = getattr(status, "_online_status", "") or ""
+        effective_st = cfg_st if cfg_st in ("online", "idle", "dnd", "invisible") else (
+            raw_live_st if raw_live_st in ("online", "idle", "dnd", "invisible") else "online"
+        )
+        cfg_kind = getattr(status, "_activity_kind", "globe") or "globe"
+        cfg_title = getattr(status, "_activity_title", "") or ("Globe" if cfg_kind == "globe" else "")
         presence_config = {
-            "online_status": getattr(status, "_online_status", "online"),
-            "activity_kind": getattr(status, "_activity_kind", "globe"),
-            "activity_title": getattr(status, "_activity_title", ""),
+            "online_status": effective_st,
+            "activity_kind": cfg_kind,
+            "activity_title": cfg_title,
             "activity_extra": getattr(status, "_activity_extra", ""),
             "custom_status_text": getattr(status, "_custom_status_text", ""),
             "hypesquad_house": getattr(status, "_hypesquad_house", "leave"),
             "bio_text": getattr(status, "_bio_text", ""),
             "rotate_interval": getattr(status, "_rotate_interval", 15.0),
             "rotate_slides": getattr(status, "_rotate_slides", []),
+            "live_activities": live_activities,
         }
 
     # Gather spoofer live stats
@@ -358,8 +382,11 @@ def register_routes(
             start_epoch = time.time() - max(0.0, offset)
             bot._start_epoch = start_epoch
             uid = bot.user.id if bot.user else 0
-            st_enum = status._discord_status_enum() if status else discord.Status.online
-            await bot.change_presence(activities=get_default_globe_activities(uid, start_epoch), status=st_enum)
+            st_enum = status._discord_status_enum() if status else None
+            if st_enum is not None:
+                await bot.change_presence(activities=get_default_globe_activities(uid, start_epoch), status=st_enum)
+            else:
+                await bot.change_presence(activities=get_default_globe_activities(uid, start_epoch))
             if status:
                 status._activity_kind = "globe"
                 status._activity_title = "Globe"
@@ -527,7 +554,11 @@ def register_routes(
                         details="In-Game",
                         timestamps={"start": int(time.time() * 1000)},
                     )
-                    await bot.change_presence(activities=[act], status=st_enum)
+                    st_enum = status._discord_status_enum()
+                    if st_enum is not None:
+                        await bot.change_presence(activities=[act], status=st_enum)
+                    else:
+                        await bot.change_presence(activities=[act])
                     ticks = max(1, int(interval))
                     for sec_i in range(ticks):
                         if status._spoofer_cancel:

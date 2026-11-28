@@ -116,7 +116,7 @@ class Status(commands.Cog):
         self._rotate_task: asyncio.Task | None = None
         self._startup_rpc_enabled: bool = self._load_rpc_flag("startup_rpc", default=True)
         self._custom_status_enabled: bool = self._load_rpc_flag("startup_custom_status", default=False)
-        self._online_status: str = self._load_str("online_status", "online")
+        self._online_status: str = self._load_str("online_status", "")
         self._custom_status_text: str = self._load_str("custom_status_text", "")
         self._bio_text: str = self._load_str("bio_text", "")
         self._activity_kind: str = self._load_str(
@@ -166,13 +166,15 @@ class Status(commands.Cog):
         except Exception:
             pass
 
-    def _discord_status_enum(self) -> discord.Status:
+    def _discord_status_enum(self) -> discord.Status | None:
+        if not self._online_status:
+            return None
         return {
             "online": discord.Status.online,
             "idle": discord.Status.idle,
             "dnd": discord.Status.dnd,
             "invisible": discord.Status.invisible,
-        }.get(self._online_status, discord.Status.online)
+        }.get(self._online_status)
 
     async def apply_default_rpc(self) -> bool:
         """Apply saved Globe Rich Presence or custom activity on startup; honor online status."""
@@ -203,8 +205,11 @@ class Status(commands.Cog):
                 activities.append(discord.CustomActivity(name="Custom Status", state=self._custom_status_text[:128]))
 
             if activities:
-                await self.bot.change_presence(activities=activities, status=st_enum)
-            elif self._online_status != "online":
+                kwargs: dict[str, Any] = {"activities": activities}
+                if st_enum is not None:
+                    kwargs["status"] = st_enum
+                await self.bot.change_presence(**kwargs)
+            elif st_enum is not None:
                 await self.bot.change_presence(status=st_enum)
             self._init_done = True
             log_info("Rpc Initialized successful")

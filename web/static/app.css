@@ -883,26 +883,41 @@ button.sm { padding: 0.42rem 0.85rem; font-size: var(--text-sm); }
 @media (max-width: 900px) {
   .auth-gate { grid-template-columns: 1fr; }
   .auth-visual { display: none; }
-  .bento-metrics, .spoofer-live-stats { grid-template-columns: repeat(2, 1fr); gap: 0.75rem; }
+  .bento-metrics, .spoofer-live-stats { grid-template-columns: repeat(2, 1fr); gap: 0.72rem; }
   .bento-split, .bento-split.asymmetric, .bento-split.dossier-split, .dm-studio-layout { grid-template-columns: 1fr; }
   .dm-list-pane { border-right: none; padding-right: 0; border-bottom: 1px solid var(--border); padding-bottom: 0.85rem; }
-  .dm-conv-list { max-height: 220px; }
-  .dm-chat-pane { height: 470px; }
+  .dm-conv-list { max-height: 210px; }
+  .dm-chat-pane { height: 440px; }
   .overview-config-strip { grid-template-columns: 1fr; }
   .dossier-layout { grid-template-columns: 1fr; }
   .spoofer-grid, .spoofer-grid.two-col { grid-template-columns: 1fr; }
   .inline-form { flex-wrap: wrap; }
+  .rank-top { flex-wrap: wrap; }
   .top-sep { display: none; }
   .brand-lockup .wordmark { display: none; }
 }
 
 @media (max-width: 600px) {
+  .content-area { padding: 1rem 0.72rem 8.5rem; gap: 1rem; }
+  .bento-card { padding: 1.05rem 0.98rem; border-radius: 22px; gap: 0.82rem; }
+  .metric-tile { padding: 0.92rem 0.98rem; }
+  .metric-val { font-size: 1.3rem; }
+  .block-head { gap: 0.5rem; }
+  .block-head > div { flex: 1 1 100%; }
+  .inline-form input, .inline-form select { flex: 1 1 150px; min-width: 0; }
+  .inline-form.compact input { max-width: none; }
+  .inline-actions { gap: 0.4rem; }
+  .inline-actions button, .inline-actions a { padding: 0.44rem 0.78rem; font-size: 0.78rem; }
+  .dm-composer { padding: 0.55rem 0.6rem; gap: 0.38rem; }
+  .dm-composer textarea { min-width: 0; font-size: 0.84rem; padding: 0.48rem 0.68rem; }
+  #btn-dm-attach, #btn-dm-send { padding: 0.48rem 0.74rem; font-size: 0.78rem; }
+  .data-row { flex-wrap: wrap; gap: 0.5rem; }
   .acct-name { display: none; }
   .liquid-dock { width: min(420px, calc(100vw - 20px)); padding: 5px; justify-content: space-between; gap: 0; }
   .dock-item { flex: 1 1 0; flex-direction: column; gap: 3px; padding: 0.48rem 0.35rem; font-size: 0.72rem; }
   .dock-item svg { width: 17px; height: 17px; }
   .sliding-seg { width: 100%; }
-  .sliding-seg button { padding: 0.42rem 0.3rem; font-size: 0.73rem; }
+  .sliding-seg button { padding: 0.4rem 0.22rem; font-size: 0.7rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

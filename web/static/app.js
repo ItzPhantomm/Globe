@@ -747,7 +747,21 @@ function hydratePresenceConfig(pc, sp) {
   setSegActive("#activity-kind-seg", "actKind", kind === "clear" ? null : kind);
   $("#rpc-live-badge").textContent = kind === "clear"
     ? "Cleared"
-    : (pc?.activity_title && kind !== "globe" ? `${kind}: ${pc.activity_title}` : kind.toUpperCase());
+    : (kind === "globe" ? "GLOBE RPC" : (pc?.activity_title ? `${kind}: ${pc.activity_title}` : kind.toUpperCase()));
+
+  const prevEl = $("#rpc-live-preview");
+  if (prevEl) {
+    const liveActs = pc?.live_activities || [];
+    if (liveActs.length) {
+      prevEl.textContent = "Live on Discord: " + liveActs.map((a) => `${a.type}: ${a.name}${a.detail ? ` (${a.detail})` : ""}`).join(" · ");
+    } else if (kind === "globe") {
+      prevEl.textContent = "Active: Official Globe Rich Presence · Watching Globe (Try Globe! / Add Friend)";
+    } else if (kind === "clear") {
+      prevEl.textContent = "Active: No Rich Presence set";
+    } else {
+      prevEl.textContent = `Active: ${kind.toUpperCase()} — ${pc?.activity_title || "—"}`;
+    }
+  }
 
   if ($("#ov-presence-summary")) {
     const rpcLabel = kind === "clear" ? "No RPC" : (kind === "globe" ? "Globe RPC" : `${kind}: ${pc.activity_title || "—"}`);
@@ -755,7 +769,7 @@ function hydratePresenceConfig(pc, sp) {
   }
 
   setSegActive("#hypesquad-seg", "house", house);
-  if ($("#act-title")) $("#act-title").value = (kind !== "globe" && kind !== "clear") ? (pc?.activity_title || "") : "";
+  if ($("#act-title")) $("#act-title").value = kind === "clear" ? "" : (pc?.activity_title || (kind === "globe" ? "Globe" : ""));
   if ($("#act-extra")) $("#act-extra").value = pc?.activity_extra || "";
   if ($("#cs-input")) $("#cs-input").value = pc?.custom_status_text || "";
   if ($("#bio-input") && pc?.bio_text) $("#bio-input").value = pc.bio_text;
