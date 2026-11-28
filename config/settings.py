@@ -55,7 +55,7 @@ class Settings:
     # ── Web Control Plane ──────────────────────────────────
     dashboard_enabled: bool = field(default_factory=lambda: _env_bool("DASHBOARD_ENABLED", True))
     dashboard_host: str = field(default_factory=lambda: _env_str("DASHBOARD_HOST", "127.0.0.1"))
-    dashboard_port: int = field(default_factory=lambda: _env_int("DASHBOARD_PORT", 7777))
+    dashboard_port: int = field(default_factory=lambda: _env_int("DASHBOARD_PORT", 8787))
 
 
 # Singleton — import this everywhere
