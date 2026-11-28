@@ -1966,15 +1966,7 @@ async function loadQuestsView(sync = true) {
   }
 }
 
-$("#q-cfg-orbs")?.addEventListener("click", () => {
-  const b = $("#q-cfg-orbs");
-  b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true"));
-});
-$("#q-cfg-enroll")?.addEventListener("click", () => {
-  const b = $("#q-cfg-enroll");
-  b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true"));
-});
-$("#btn-quest-cfg-save")?.addEventListener("click", async () => {
+async function saveQuestConfig(silent = false) {
   const orbs_only = $("#q-cfg-orbs")?.getAttribute("aria-pressed") === "true";
   const auto_enroll = $("#q-cfg-enroll")?.getAttribute("aria-pressed") === "true";
   const pace_mode = $("#q-pace-seg button.active")?.dataset.pace || "stealth";
@@ -1984,14 +1976,35 @@ $("#btn-quest-cfg-save")?.addEventListener("click", async () => {
     body: { orbs_only, auto_enroll, pace_mode, allowed_tasks },
   });
   renderQuestsState(res);
-  toast("Quest configuration saved");
+  if (!silent) toast("Quest configuration saved");
+  return res;
+}
+
+$("#q-cfg-orbs")?.addEventListener("click", () => {
+  const b = $("#q-cfg-orbs");
+  b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true"));
+  saveQuestConfig(true).catch(() => {});
 });
+$("#q-cfg-enroll")?.addEventListener("click", () => {
+  const b = $("#q-cfg-enroll");
+  b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true"));
+  saveQuestConfig(true).catch(() => {});
+});
+$$("#q-pace-seg button").forEach((b) => b.addEventListener("click", () => {
+  setSegActive("#q-pace-seg", "pace", b.dataset.pace);
+  saveQuestConfig(true).catch(() => {});
+}));
+$$("#q-task-chips input[type=checkbox]").forEach((cb) => cb.addEventListener("change", () => {
+  saveQuestConfig(true).catch(() => {});
+}));
+$("#btn-quest-cfg-save")?.addEventListener("click", () => saveQuestConfig(false));
 $("#btn-quest-sync")?.addEventListener("click", async () => {
   await loadQuestsView(true);
   toast("Synced live quests & Orbs balance");
 });
 $("#btn-quest-start")?.addEventListener("click", async () => {
   try {
+    await saveQuestConfig(true);
     const res = await api("/api/v1/quests/start", { method: "POST" });
     renderQuestsState(res);
     toast("Orb Quest Completor started");
