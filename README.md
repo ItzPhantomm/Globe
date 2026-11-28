@@ -1,38 +1,38 @@
 # Globe
 
-**High-throughput asynchronous Discord client runtime, credential vault, and modular automation engine.**
+Discord selfbot runtime built on `discord.py-self`, with an encrypted local token vault, SQLite message logs, and a browser dashboard.
 
-Globe is an engineered Python runtime built on `discord.py-self`, designed for deterministic low-latency execution, minimal memory overhead, and zero-trust local credential storage across Linux servers, containers, and mobile Termux environments.
+Runs cleanly on Linux servers, Docker containers, and Android Termux.
 
 ---
 
-## Core Engineering
+## How it works
 
-| Layer | Implementation | Purpose |
+| Part | File | What it does |
 |---|---|---|
-| **Credential Vault** | `core/vault.py` (`AES-256-GCM` + `PBKDF2-HMAC-SHA256`, 480k rounds) | Encrypts tokens on disk (`ENC:...`); plaintext exists strictly in volatile RAM via `--key` / `GLOBE_KEY` or masked `getpass` prompt. |
-| **Telemetry & Forensics** | `data/tracker.py` (SQLite `WAL` + micro-batching) | Persistent message analytics, 500-row deleted-message forensics, bookmarks, and runtime `kv_state` with non-blocking batched commits. |
-| **Network Diagnostics** | `modules/tools.py` (Connection-pooled `httpx.AsyncClient`) | Reuses TCP sockets and TLS sessions across IP/DNS/HTTP/OSINT lookups, webhook forwarding, and vanity monitoring. |
-| **Rate-Limit Shield** | `footprint_handlers.py` | Adaptive bucket pacing, randomized human jitter, and automatic HTTP `429` `Retry-After` backoff. |
-| **Hot-Reload Lifecycle** | `main.py` & `modules/utility.py` | Startup Git fast-forward updater, in-memory module hot-reloading (`g.update`, `g.reload`), and clean process restarts (`g.restart`). |
+| **Token vault** | `core/vault.py` | Encrypts your token on disk with AES-256-GCM (PBKDF2-HMAC-SHA256, 480k rounds). Plaintext stays in RAM only when unlocked via `--key`, `GLOBE_KEY`, or prompt. |
+| **Web dashboard** | `web/` | Local `aiohttp` control panel + WebSocket log stream, protected by token login, HMAC-SHA256 cookies, and CSRF tokens. |
+| **Local database** | `data/tracker.py` | SQLite WAL database storing message counts, a 500-row deleted-message snipe log, bookmarks, and saved feature toggles. |
+| **Rate-limit pacing** | `footprint_handlers.py` | Adds human jitter and honors Discord HTTP 429 `Retry-After` windows. |
+| **Updates & reload** | `main.py`, `modules/utility.py` | Optional `git pull` on boot plus in-memory cog reloading (`g.reload`, `g.update`). |
 
 ---
 
-## Architecture & Modules
+## Modules
 
-Globe decouples capabilities into **7 hot-reloadable cogs**:
+Globe splits commands into **7 cogs**:
 
-- **`utility`** — Core lifecycle (`ping`, `about`, `update`, `restart`, `reload`, `vault`), Smart AFK digest (`afk`, `unafk`, `afkpings`), 10-deep attachment snipe (`snipe`, `esnipe`, `snipesearch`), bookmarks (`save`, `saved`), DM/channel management (`selfpurge`, `deletedm`, `exportchat`, `closedms`), and emoji cloning (`steal`, `stealall`).
-- **`tools`** — Passive intelligence (`radar`, `stalk`, `stalklog`, `mutuals`, `activity`), relationship diffing (`friendsbackup`, `friendsdiff`, `acceptfriends`, `clearoutgoing`), global keyword & alert webhook forwarding (`kw`, `alertwebhook`), `vanitywatch`, `gsniper`, `schedule`, encoders (`morse`, `demorse`, `b64`, `hex`, `bin`), and network diagnostics (`iplookup`, `dns`, `headers`, `linkinfo`, `invinfo`, `qr`).
-- **`moderation`** — Server permission security auditing (`auditperms`), channel analytics (`topchatters`), server snapshot & cloner (`backupserver`, `cloneserver`), lockdown controls (`lockdown`, `unlockdown`), targeted purges (`purgelinks`, `purgebots`), and webhook tooling.
-- **`status`** — Presence controls (`hypesquad`, `bio`, `customstatus`, `statusrotate`), non-intrusive opt-in Rich Presence (`globerpc on|off`), and detectable game session telemetry (`badgespoofer`).
-- **`voice`** — Persistent 24/7 voice stay with auto-reconnect (`joinvc`, `leavevc`), live target following (`vcfollow`), bulk member moves (`vcmoveall`), and channel diagnostics (`voiceinfo`, `vclist`).
-- **`troll`** — Channel mimicry (`mimic`, `unmimic`), reaction targeting (`reactspam`), ghost-pings, and paced flood controls.
-- **`fun`** — Lightweight deterministic social and RNG utilities.
+- **`utility`** — Core info and cleanup (`ping`, `about`, `update`, `restart`, `reload`, `vault`), AFK auto-replies with missed pings (`afk`, `unafk`, `afkpings`), 10-message snipe history (`snipe`, `esnipe`, `snipesearch`), bookmarks (`save`, `saved`), DM cleanup (`selfpurge`, `deletedm`, `exportchat`, `closedms`), and emoji stealing (`steal`, `stealall`).
+- **`tools`** — Ghost-ping alerts (`radar`), user tracking (`stalk`, `stalklog`, `mutuals`, `activity`), friend list diffs (`friendsbackup`, `friendsdiff`, `acceptfriends`, `clearoutgoing`), keyword/webhook forwarding (`kw`, `alertwebhook`), vanity monitoring (`vanitywatch`), giveaways (`gsniper`), encoders (`morse`, `b64`, `hex`, `bin`), and network checks (`iplookup`, `dns`, `headers`, `linkinfo`, `invinfo`, `qr`).
+- **`moderation`** — Permission audit (`auditperms`), top chatters (`topchatters`), server backups and cloning (`backupserver`, `cloneserver`), channel lockdowns (`lockdown`, `unlockdown`), purges (`purgelinks`, `purgebots`), and webhooks.
+- **`status`** — HypeSquad, bio, custom status, status rotator, optional Globe Rich Presence (`globerpc on|off`), elapsed timer spoofing (`rpctime`), and game badge spoofer (`badgespoofer`).
+- **`voice`** — 24/7 voice connection with auto-reconnect (`joinvc`, `leavevc`), user following (`vcfollow`), member moving (`vcmoveall`), and channel info (`voiceinfo`, `vclist`).
+- **`troll`** — Channel mimicry (`mimic`, `unmimic`), auto-reactions (`reactspam`), ghost-pings, and flood controls.
+- **`fun`** — Quick chat games and RNG helpers.
 
 ---
 
-## Quickstart
+## Setup
 
 ```bash
 git clone https://github.com/ItzPhantomm/Globe.git
@@ -42,33 +42,37 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-### Credential Encryption & Launch
+### Encrypt your token and run
 
 ```bash
-# 1. (Optional) Extract token on headless/mobile environments
+# Optional: extract token locally
 python ext_token.py
 
-# 2. Encrypt your stored token in .env with AES-256-GCM
+# Encrypt the token inside .env with AES-256-GCM
 python main.py --encrypt "<your-passphrase>"
 
-# 3. Launch Globe (unlocks token strictly in RAM)
+# Start Globe (unlocks token only in RAM)
 python main.py --key "<your-passphrase>"
 ```
 
-Supported CLI flags: `--token` / `-t`, `--prefix` / `-p`, `--key` / `-k` (`GLOBE_KEY`), `--encrypt`, `--debug` / `-d`.
+CLI flags: `--token` / `-t`, `--prefix` / `-p`, `--key` / `-k` (`GLOBE_KEY`), `--encrypt`, `--debug` / `-d`.
+
+### Web dashboard
+
+By default, Globe serves the dashboard on `http://127.0.0.1:8787` (`DASHBOARD_ENABLED`, `DASHBOARD_HOST`, `DASHBOARD_PORT` in `.env`). Sign in with your Discord account token. To access it remotely, point a Cloudflare Tunnel (`cloudflared tunnel --url http://127.0.0.1:8787`) or SSH port forward at it.
 
 ---
 
-## Verification
+## Tests
 
 ```bash
-pytest
+python3 -m pytest
 ```
 
-Automated unit tests cover authentication, AES-256-GCM vault roundtrips, encoding/translation logic, SQLite forensics/bookmarks persistence, and cross-cog command/alias collision checks.
+Covers token vault encryption/decryption, auth cookies, CSRF checks, rate-limit lockouts, dashboard APIs, persistence, and duplicate-command checks across all 7 cogs.
 
 ---
 
-## Security & Local-First Guarantee
+## Privacy & storage
 
-Globe operates exclusively on your host environment with zero third-party telemetry servers. Credentials, SQLite state, and server snapshots remain strictly local under `.gitignore` isolation. Licensed under the MIT License.
+Everything runs on your own machine. No third-party servers receive your token or database; local `.env`, SQLite files, and server backups stay ignored by git. MIT License.
