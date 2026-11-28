@@ -72,6 +72,50 @@
         <button type="submit" id="login-submit" class="btn-expressive full-w">
           <span>Enter Control Plane</span>
         </button>
+
+        <!-- Get Your Token panel -->
+        <div class="get-token-toggle-row">
+          <button type="button" id="get-token-toggle" class="m3-pill-btn" style="width:100%;margin-top:10px;">
+            Get Your Token
+          </button>
+        </div>
+        <div id="get-token-panel" class="hidden" style="margin-top:12px;display:flex;flex-direction:column;gap:10px;">
+          <div class="field">
+            <label for="gt-login">Email or Phone</label>
+            <input id="gt-login" type="text" placeholder="email@example.com or +1234..." autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="gt-pass">Password</label>
+            <input id="gt-pass" type="password" placeholder="Discord password" autocomplete="off" />
+          </div>
+          <div id="get-token-error" class="error-banner hidden" role="alert"></div>
+          <button type="button" id="get-token-submit" class="btn-expressive full-w">
+            <span>Sign In to Discord</span>
+          </button>
+
+          <!-- 2FA panel (shown only when MFA required) -->
+          <div id="gt-mfa-panel" class="hidden" style="display:flex;flex-direction:column;gap:10px;margin-top:4px;">
+            <div class="field">
+              <label for="gt-totp">2FA / Authenticator Code</label>
+              <input id="gt-totp" type="text" placeholder="6-digit code" maxlength="10" autocomplete="one-time-code" inputmode="numeric" />
+            </div>
+            <button type="button" id="gt-mfa-submit" class="btn-expressive full-w">
+              <span>Verify 2FA</span>
+            </button>
+          </div>
+
+          <!-- Token result (shown on success) -->
+          <div id="gt-result-panel" class="hidden" style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
+            <label style="font-size:0.78rem;opacity:0.7;">Your Discord Token (copy it above)</label>
+            <div class="input-group">
+              <input id="gt-token-out" type="text" readonly spellcheck="false" style="font-family:monospace;font-size:0.72rem;" />
+              <button type="button" id="gt-copy-btn" class="m3-pill-btn">Copy</button>
+            </div>
+            <button type="button" id="gt-use-btn" class="btn-expressive full-w" style="margin-top:2px;">
+              <span>Use This Token →</span>
+            </button>
+          </div>
+        </div>
       </form>
     </div>
   </section>

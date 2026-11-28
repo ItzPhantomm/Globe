@@ -601,6 +601,108 @@ $("#btn-logout")?.addEventListener("click", async () => {
   location.reload();
 });
 
+// ── Get Your Token flow ───────────────────────────────────
+let _gtTicket = "";
+
+$("#get-token-toggle")?.addEventListener("click", () => {
+  const panel = $("#get-token-panel");
+  const isHidden = panel.classList.toggle("hidden");
+  $("#get-token-toggle").textContent = isHidden ? "Get Your Token" : "Hide";
+});
+
+$("#get-token-submit")?.addEventListener("click", async () => {
+  const errEl = $("#get-token-error");
+  errEl.classList.add("hidden");
+  const loginVal = $("#gt-login").value.trim();
+  const passVal  = $("#gt-pass").value;
+  if (!loginVal || !passVal) {
+    errEl.textContent = "Email/phone and password required.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  const btn = $("#get-token-submit");
+  btn.disabled = true;
+  btn.firstElementChild.textContent = "Signing in…";
+  try {
+    const res = await fetch("/api/v1/auth/token-from-creds", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ login: loginVal, password: passVal }),
+    });
+    const data = await res.json();
+    if (data.error) { errEl.textContent = data.error; errEl.classList.remove("hidden"); return; }
+    if (data.mfa) {
+      _gtTicket = data.ticket || "";
+      $("#gt-mfa-panel").classList.remove("hidden");
+      $("#gt-totp").focus();
+      return;
+    }
+    if (data.token) { _gtShowToken(data.token); return; }
+    errEl.textContent = "Unexpected response from server.";
+    errEl.classList.remove("hidden");
+  } catch (e) {
+    errEl.textContent = e.message;
+    errEl.classList.remove("hidden");
+  } finally {
+    btn.disabled = false;
+    btn.firstElementChild.textContent = "Sign In to Discord";
+  }
+});
+
+$("#gt-mfa-submit")?.addEventListener("click", async () => {
+  const errEl = $("#get-token-error");
+  errEl.classList.add("hidden");
+  const code = $("#gt-totp").value.trim();
+  if (!code) { errEl.textContent = "Enter your 2FA code."; errEl.classList.remove("hidden"); return; }
+  const btn = $("#gt-mfa-submit");
+  btn.disabled = true;
+  btn.firstElementChild.textContent = "Verifying…";
+  try {
+    const res = await fetch("/api/v1/auth/token-from-creds", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ totp_code: code, ticket: _gtTicket, login: "_mfa_", password: "_mfa_" }),
+    });
+    const data = await res.json();
+    if (data.error) { errEl.textContent = data.error; errEl.classList.remove("hidden"); return; }
+    if (data.token) { _gtShowToken(data.token); return; }
+    errEl.textContent = "Unexpected response.";
+    errEl.classList.remove("hidden");
+  } catch (e) {
+    errEl.textContent = e.message;
+    errEl.classList.remove("hidden");
+  } finally {
+    btn.disabled = false;
+    btn.firstElementChild.textContent = "Verify 2FA";
+  }
+});
+
+function _gtShowToken(token) {
+  const out = $("#gt-token-out");
+  if (out) out.value = token;
+  $("#gt-result-panel")?.classList.remove("hidden");
+  $("#gt-mfa-panel")?.classList.add("hidden");
+}
+
+$("#gt-copy-btn")?.addEventListener("click", () => {
+  const val = $("#gt-token-out")?.value;
+  if (val) {
+    navigator.clipboard.writeText(val).catch(() => {});
+    $("#gt-copy-btn").textContent = "Copied!";
+    setTimeout(() => { $("#gt-copy-btn").textContent = "Copy"; }, 1500);
+  }
+});
+
+$("#gt-use-btn")?.addEventListener("click", () => {
+  const val = $("#gt-token-out")?.value;
+  if (val) {
+    const inp = $("#token-input");
+    if (inp) inp.value = val;
+    $("#get-token-panel")?.classList.add("hidden");
+    $("#get-token-toggle").textContent = "Get Your Token";
+  }
+});
+
 // ── 9. Spoofer Live Telemetry Renderer ────────────────────
 function renderSpooferTelemetry() {
   const s = spooferState;

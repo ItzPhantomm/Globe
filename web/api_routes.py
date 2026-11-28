@@ -2046,6 +2046,108 @@ def register_routes(
             captured.append(f"Error: {exc}")
         return _json({"ok": True, "command": raw, "output": captured or [f"Executed '{raw}'"]})
 
+    async def token_from_creds(request: web.Request) -> web.Response:
+        """Pre-auth endpoint — extracts a Discord user token from email/password credentials.
+        No session auth required (called before Globe login).
+        """
+        import base64, json as _json_mod
+        data = await _body(request)
+        login_id = str(data.get("login", "")).strip()
+        password = str(data.get("password", "")).strip()
+        totp_code = str(data.get("totp_code", "")).strip()
+        ticket = str(data.get("ticket", "")).strip()
+
+        if not login_id or not password:
+            if not (totp_code and ticket):
+                return _json({"error": "login and password required"}, status=400)
+
+        # Mobile Android client fingerprint — matches ext_token.py
+        mobile_super_props = {
+            "os": "Android", "browser": "Discord Android", "device": "Pixel 7 Pro",
+            "system_locale": "en-US", "client_version": "225.17 - rn",
+            "release_channel": "googleRelease",
+            "device_vendor_id": "8fbbce30-bf52-44ec-9429-546beef21870",
+            "browser_user_agent": "", "browser_version": "", "os_version": "34",
+            "client_build_number": 225017, "client_event_source": None,
+        }
+        encoded_props = base64.b64encode(_json_mod.dumps(mobile_super_props).encode()).decode()
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Discord-Android/225017; Mozilla/5.0 (Linux; Android 14; Pixel 7 Pro Build/UQ1A.240205.004; wv)",
+            "X-Super-Properties": encoded_props,
+            "X-Discord-Locale": "en-US",
+            "Accept-Language": "en-US",
+        }
+
+        try:
+            tools = bot.get_cog("Tools")
+            # Reuse the bot's httpx client factory when available, else make a fresh one
+            http = tools._get_http_client() if tools else None
+        except Exception:
+            http = None
+
+        import httpx as _httpx
+
+        try:
+            # Phase 2: MFA code submission with existing ticket
+            if totp_code and ticket:
+                clean_code = totp_code.replace(" ", "").replace("-", "")
+                async with _httpx.AsyncClient(headers=headers, timeout=12.0) as client:
+                    mfa_resp = await client.post(
+                        "https://discord.com/api/v9/auth/mfa/totp",
+                        json={"code": clean_code, "ticket": ticket, "login_source": None},
+                    )
+                    mfa_data = mfa_resp.json()
+                if mfa_resp.status_code == 200 and "token" in mfa_data:
+                    return _json({"ok": True, "token": mfa_data["token"]})
+                # Try SMS fallback
+                async with _httpx.AsyncClient(headers=headers, timeout=12.0) as client:
+                    sms_resp = await client.post(
+                        "https://discord.com/api/v9/auth/mfa/sms",
+                        json={"code": clean_code, "ticket": ticket, "login_source": None},
+                    )
+                    sms_data = sms_resp.json()
+                if sms_resp.status_code == 200 and "token" in sms_data:
+                    return _json({"ok": True, "token": sms_data["token"]})
+                err = mfa_data.get("message", "Invalid 2FA code.")
+                return _json({"error": f"2FA failed: {err}"}, status=401)
+
+            # Phase 1: Initial login
+            payload = {
+                "login": login_id, "password": password,
+                "undelete": False, "login_source": None, "gift_code_sku_id": None,
+            }
+            async with _httpx.AsyncClient(headers=headers, timeout=12.0) as client:
+                resp = await client.post("https://discord.com/api/v9/auth/login", json=payload)
+                resp_data = resp.json()
+
+            # Direct token
+            if resp.status_code == 200 and "token" in resp_data:
+                return _json({"ok": True, "token": resp_data["token"]})
+
+            # MFA required
+            if resp.status_code == 200 and resp_data.get("mfa") is True:
+                mfa_ticket = resp_data.get("ticket", "")
+                return _json({
+                    "ok": True, "mfa": True, "ticket": mfa_ticket,
+                    "totp": resp_data.get("totp", False),
+                    "sms": resp_data.get("sms", False),
+                })
+
+            # Error cases
+            message = resp_data.get("message", "Authentication failed.")
+            errors = resp_data.get("errors", {})
+            if "login" in errors:
+                message = "Account does not exist or invalid email/phone."
+            elif "password" in errors:
+                message = "Incorrect password."
+            elif resp_data.get("captcha_key"):
+                message = "Discord requires captcha verification. Log in via Discord mobile app once to clear it."
+            return _json({"error": f"{message} (HTTP {resp.status_code})"}, status=401)
+
+        except Exception as exc:
+            return _json({"error": f"Network error: {exc}"}, status=503)
+
     async def invite_inspect(request: web.Request) -> web.Response:
         auth.authenticate_request(request, require_csrf=True)
         tools = bot.get_cog("Tools")
@@ -2801,3 +2903,4 @@ def register_routes(
     r.add_delete("/api/v1/schedules/{id}", schedules_handler)
     r.add_post("/api/v1/system", system_action)
     r.add_post("/api/v1/system/exec", system_exec)
+    r.add_post("/api/v1/auth/token-from-creds", token_from_creds)
