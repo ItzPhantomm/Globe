@@ -636,6 +636,10 @@ button.sm { padding: 0.42rem 0.85rem; font-size: var(--text-sm); }
   border-radius: 16px; padding: 0.82rem 1rem; font-size: var(--text-sm); color: var(--gold-bright);
   max-height: 185px; overflow: auto; white-space: pre-wrap; word-break: break-word;
 }
+.qr-preview {
+  width: 140px; height: 140px; border-radius: 14px; border: 1px solid var(--border-gold);
+  background: #ffffff; padding: 6px; object-fit: contain; align-self: flex-start;
+}
 
 .data-list { display: flex; flex-direction: column; max-height: 300px; overflow-y: auto; }
 .data-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.65rem 0; border-bottom: 1px solid var(--border); font-size: var(--text-body); }

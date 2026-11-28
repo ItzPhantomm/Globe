@@ -894,7 +894,52 @@ async function loadOverview() {
 
   $("#log-stream").innerHTML = "";
   (data.logs || []).forEach(appendLogLine);
+  loadAfkPings();
 }
+
+async function loadAfkPings() {
+  try {
+    const r = await api("/api/v1/afk/pings");
+    $("#afk-pings-list").innerHTML = r.pings?.length
+      ? r.pings.map((p) => `
+        <div class="data-row">
+          <div class="data-main">
+            <div class="data-title">${esc(p.author)} · <span class="muted">${esc(p.where)}</span></div>
+            <div class="muted">${esc(p.content)}</div>
+          </div>
+          ${p.jump ? `<a class="m3-pill-btn" href="${esc(p.jump)}" target="_blank" rel="noopener" style="text-decoration:none;">Jump</a>` : ""}
+        </div>`).join("")
+      : `<div class="muted">${r.afk ? "AFK armed — no missed pings yet." : "No missed AFK pings logged."}</div>`;
+  } catch (_) {}
+}
+
+async function runWebCommand() {
+  const inp = $("#cmd-exec-input");
+  const cmd = (inp?.value || "").trim();
+  if (!cmd) return;
+  inp.value = "";
+  appendLogLine({ ts: new Date().toTimeString().slice(0, 8), level: "CMD", message: `> ${cmd}` });
+  try {
+    const res = await api("/api/v1/system/exec", { method: "POST", body: { command: cmd } });
+    (res.output || []).forEach((line) => {
+      appendLogLine({ ts: new Date().toTimeString().slice(0, 8), level: res.ok ? "INFO" : "ERR", message: line });
+    });
+    loadAfkPings();
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+$("#btn-cmd-exec")?.addEventListener("click", runWebCommand);
+$("#cmd-exec-input")?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); runWebCommand(); }
+});
+$("#btn-afk-refresh")?.addEventListener("click", loadAfkPings);
+$("#btn-afk-clear")?.addEventListener("click", async () => {
+  await api("/api/v1/afk/pings", { method: "DELETE" });
+  loadAfkPings();
+  toast("AFK inbox cleared");
+});
 
 $$("#chart-mode-seg button").forEach((b) => {
   b.addEventListener("click", () => {
@@ -1082,6 +1127,17 @@ $("#btn-bio-apply")?.addEventListener("click", async () => {
   await api("/api/v1/presence/bio", { method: "POST", body: { text: $("#bio-input").value } });
   toast("Bio saved");
 });
+$("#btn-prof-save")?.addEventListener("click", async () => {
+  const global_name = $("#prof-gname").value.trim();
+  const avatar_url = $("#prof-avatar-url").value.trim();
+  if (!global_name && !avatar_url) return toast("Enter display name or avatar URL");
+  const body = {};
+  if (global_name) body.global_name = global_name;
+  if (avatar_url) body.avatar_url = avatar_url;
+  await api("/api/v1/presence/profile", { method: "POST", body });
+  toast("Profile updated");
+  loadOverview();
+});
 
 $$("#hypesquad-seg button").forEach((b) => {
   b.addEventListener("click", async () => {
@@ -1197,18 +1253,36 @@ async function runUserLookup(uid) {
   }
 }
 
+let snipeMode = "deleted";
+
 async function loadIntel() {
-  const [sn, rd, kw, st, vn] = await Promise.all([
+  const [sn, esn, snp, rd, kw, st, vn] = await Promise.all([
     api(`/api/v1/intel/snipes?q=${encodeURIComponent($("#snipe-search").value.trim())}`),
+    api("/api/v1/intel/esnipes").catch(() => ({ esnipes: [] })),
+    api("/api/v1/intel/snipers").catch(() => ({ snipers: [], keyword_hits: [] })),
     api("/api/v1/intel/radar"),
     api("/api/v1/intel/keywords"),
     api("/api/v1/intel/stalk"),
     api("/api/v1/intel/vanity"),
   ]);
 
-  $("#snipes-list").innerHTML = sn.snipes.length
-    ? sn.snipes.map((s) => `<div class="data-row"><div class="data-main"><div class="data-title">${esc(s.author_name)}</div><div class="muted">${esc(s.content)}</div></div></div>`).join("")
-    : `<div class="muted">No deleted messages yet.</div>`;
+  if (snipeMode === "edited") {
+    $("#snipes-list").innerHTML = (esn.esnipes || []).length
+      ? esn.esnipes.map((s) => `<div class="data-row"><div class="data-main"><div class="data-title">${esc(s.author)}</div><div class="muted">Before: ${esc(s.before)}<br/>After: ${esc(s.after)}</div></div></div>`).join("")
+      : `<div class="muted">No edited messages cached yet.</div>`;
+  } else {
+    $("#snipes-list").innerHTML = sn.snipes.length
+      ? sn.snipes.map((s) => `<div class="data-row"><div class="data-main"><div class="data-title">${esc(s.author_name)}</div><div class="muted">${esc(s.content)}</div></div></div>`).join("")
+      : `<div class="muted">No deleted messages yet.</div>`;
+  }
+
+  $("#sniper-hits-list").innerHTML = (snp.snipers || []).length
+    ? snp.snipers.map((h) => `<div class="data-row"><div class="data-main"><div class="data-title"><span class="mini-tag gold mono">${esc(h.kind)}</span> ${esc(h.status)} · ${esc(h.detail)}</div><div class="muted mono">${esc(h.where)}${h.ms ? ` · ${h.ms}ms` : ""}</div></div></div>`).join("")
+    : `<div class="muted">No sniper hits recorded yet.</div>`;
+
+  $("#kw-hits-list").innerHTML = (snp.keyword_hits || []).length
+    ? snp.keyword_hits.map((k) => `<div class="data-row"><div class="data-main"><div class="data-title"><span class="mini-tag gold">${esc(k.kw)}</span> ${esc(k.author)}</div><div class="muted">${esc(k.content)}</div></div>${k.jump ? `<a class="m3-pill-btn" href="${esc(k.jump)}" target="_blank" rel="noopener" style="text-decoration:none;">Jump</a>` : ""}</div>`).join("")
+    : `<div class="muted">No keyword hits yet.</div>`;
 
   $("#radar-list").innerHTML = rd.radar.length
     ? rd.radar.map((r) => `<div class="data-row"><div class="data-main"><div class="data-title">${esc(r.author)} · ${esc(r.where)}</div><div class="muted">${esc(r.content)}</div></div></div>`).join("")
@@ -1226,6 +1300,51 @@ async function loadIntel() {
 
   $("#vanity-badge").textContent = vn.running ? `Watching: ${vn.target}` : "Standby";
 }
+
+$$("#snipe-mode-seg button").forEach((b) => {
+  b.addEventListener("click", () => {
+    snipeMode = b.dataset.snipeMode;
+    loadIntel();
+  });
+});
+
+$("#btn-inv-osint")?.addEventListener("click", async () => {
+  const invite = $("#inv-osint-input").value.trim();
+  if (!invite) return toast("Enter invite code");
+  $("#inv-osint-out").textContent = "Inspecting...";
+  try {
+    const res = await api("/api/v1/tools/invite-inspect", { method: "POST", body: { invite } });
+    $("#inv-osint-out").textContent = JSON.stringify(res.result, null, 2);
+  } catch (err) {
+    $("#inv-osint-out").textContent = `Error: ${err.message}`;
+  }
+});
+
+$("#btn-steal-emoji")?.addEventListener("click", async () => {
+  const guild_id = $("#steal-guild-id").value.trim();
+  const name = $("#steal-name").value.trim();
+  const source = $("#steal-src").value.trim();
+  if (!guild_id || !source) return toast("Guild ID and Emoji/URL required");
+  const res = await api("/api/v1/tools/steal-emoji", { method: "POST", body: { guild_id, name, source } });
+  toast(`Added :${res.name}:`);
+});
+
+$("#btn-tr-run")?.addEventListener("click", async () => {
+  const target_lang = $("#tr-lang").value.trim() || "en";
+  const text = $("#tr-text").value.trim();
+  if (!text) return toast("Enter text to translate");
+  const res = await api("/api/v1/tools/translate", { method: "POST", body: { text, target_lang } });
+  $("#tr-out").textContent = `[${res.detected} → ${target_lang}] ${res.translated}`;
+});
+
+$("#btn-qr-run")?.addEventListener("click", async () => {
+  const text = $("#qr-input").value.trim();
+  if (!text) return toast("Enter text or URL");
+  const res = await api("/api/v1/tools/qr", { method: "POST", body: { text } });
+  const img = $("#qr-preview");
+  img.src = res.data_uri;
+  img.classList.remove("hidden");
+});
 
 $("#btn-profile-user")?.addEventListener("click", () => runUserLookup($("#stalk-uid").value.trim()));
 $("#btn-profile-self")?.addEventListener("click", () => {
@@ -1304,7 +1423,49 @@ $("#btn-friends-diff")?.addEventListener("click", async () => {
 });
 
 // ── 17. Servers, Voice & Channel Cleanup ──────────────────
+let activeGuildChat = null;
+
+async function openGuildChannelChat(gid, cid, cname, gname) {
+  activeGuildChat = { gid, cid, cname, gname };
+  $("#gchat-title").textContent = `#${cname} (${gname})`;
+  $("#gchat-sub").textContent = `Guild ${gid} · Channel ${cid}`;
+  $("#gchat-actions")?.classList.remove("hidden");
+  $("#gchat-messages").innerHTML = `<div class="muted" style="text-align:center;padding:1rem;">Loading channel messages...</div>`;
+  try {
+    const res = await api(`/api/v1/guilds/${encodeURIComponent(gid)}/channels/${encodeURIComponent(cid)}/messages?limit=35`);
+    const msgs = res.messages || [];
+    $("#gchat-messages").innerHTML = msgs.length
+      ? msgs.map(renderDMMessageHTML).join("")
+      : `<div class="muted" style="text-align:center;padding:1rem;">No messages in #${esc(cname)}.</div>`;
+    const scroller = $("#gchat-scroll");
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  } catch (err) {
+    $("#gchat-messages").innerHTML = `<div class="muted" style="text-align:center;padding:1rem;">${esc(err.message)}</div>`;
+  }
+}
+
+async function loadVoiceRoster() {
+  try {
+    const res = await api("/api/v1/voice/roster");
+    const rows = res.roster || [];
+    $("#vc-roster-list").innerHTML = rows.length
+      ? rows.map((vc) => `
+        <div class="data-row">
+          <div class="data-main">
+            <div class="data-title">${esc(vc.guild)} · ${esc(vc.channel)} (${vc.members.length})</div>
+            <div class="muted">${vc.members.map((m) => `${esc(m.name)}${m.mute ? " 🔇" : ""}`).join(", ")}</div>
+          </div>
+          <button type="button" class="btn-ghost-sm" data-pick-vc="${esc(vc.channel_id)}">Join</button>
+        </div>`).join("")
+      : `<div class="muted">No populated voice channels right now.</div>`;
+    $$("#vc-roster-list [data-pick-vc]").forEach((b) => b.addEventListener("click", () => {
+      $("#vc-channel-id").value = b.dataset.pickVc;
+    }));
+  } catch (_) {}
+}
+
 async function loadGuilds() {
+  loadVoiceRoster();
   const data = await api("/api/v1/guilds");
   $("#guilds-list").innerHTML = data.guilds.map((g) => `
     <div class="guild-block">
@@ -1322,7 +1483,7 @@ async function loadGuilds() {
       </div>
       <div id="chs-${esc(g.id)}" class="guild-channels hidden">
         ${(g.voice_channels || []).map((v) => `<button type="button" class="ch-pill" data-pick-vc="${esc(v.id)}">VC: ${esc(v.name)} (${v.members})</button>`).join("")}
-        ${(g.text_channels || []).slice(0, 12).map((t) => `<button type="button" class="ch-pill" data-pick-tc="${esc(t.id)}">#${esc(t.name)}</button>`).join("")}
+        ${(g.text_channels || []).slice(0, 12).map((t) => `<button type="button" class="ch-pill" data-pick-tc="${esc(t.id)}" data-pick-gid="${esc(g.id)}" data-pick-gname="${esc(g.name)}" data-pick-cname="${esc(t.name)}">#${esc(t.name)}</button>`).join("")}
       </div>
     </div>`).join("") || `<div class="muted">No servers loaded.</div>`;
 
@@ -1334,9 +1495,14 @@ async function loadGuilds() {
     toast("Selected Voice Channel ID");
   }));
   $$("[data-pick-tc]").forEach((b) => b.addEventListener("click", () => {
-    $("#mod-ch-id").value = b.dataset.pickTc;
-    $("#dispatch-channel").value = b.dataset.pickTc;
-    toast("Copied Channel ID to Cleanup & Dispatch");
+    const gid = b.dataset.pickGid;
+    const cid = b.dataset.pickTc;
+    $("#mod-ch-id").value = cid;
+    $("#dispatch-channel").value = cid;
+    $("#gmod-gid").value = gid;
+    $("#gwh-gid").value = gid;
+    $("#gwh-cid").value = cid;
+    openGuildChannelChat(gid, cid, b.dataset.pickCname, b.dataset.pickGname);
   }));
 
   $$("[data-audit]").forEach((b) => b.addEventListener("click", async () => {
@@ -1393,6 +1559,84 @@ $("#btn-mimic-set")?.addEventListener("click", async () => {
 $("#btn-treact-set")?.addEventListener("click", async () => {
   await api("/api/v1/troll/control", { method: "POST", body: { action: "react", user_id: $("#treact-uid").value.trim(), emoji: $("#treact-emoji").value.trim() } });
   toast("Auto-react target updated");
+});
+$("#btn-tact-type")?.addEventListener("click", async () => {
+  const channel_id = $("#tact-cid").value.trim();
+  if (!channel_id) return toast("Channel ID required");
+  const r = await api("/api/v1/troll/extra", { method: "POST", body: { action: "faketyping", channel_id, seconds: 12 } });
+  toast(r.detail);
+});
+$("#btn-tact-ghost")?.addEventListener("click", async () => {
+  const channel_id = $("#tact-cid").value.trim();
+  const edit_to = $("#tact-text").value.trim();
+  if (!channel_id) return toast("Channel ID required");
+  const r = await api("/api/v1/troll/extra", { method: "POST", body: { action: "ghostedit", channel_id, text: "...", edit_to, delay: 3 } });
+  toast(r.detail);
+});
+$("#btn-gchat-send")?.addEventListener("click", async () => {
+  if (!activeGuildChat) return toast("Pick a server channel first");
+  const content = $("#gchat-input").value.trim();
+  if (!content) return;
+  await api(`/api/v1/guilds/${encodeURIComponent(activeGuildChat.gid)}/channels/${encodeURIComponent(activeGuildChat.cid)}/messages`, {
+    method: "POST",
+    body: { content },
+  });
+  $("#gchat-input").value = "";
+  openGuildChannelChat(activeGuildChat.gid, activeGuildChat.cid, activeGuildChat.cname, activeGuildChat.gname);
+});
+$("#btn-gchat-selfpurge")?.addEventListener("click", async () => {
+  if (!activeGuildChat) return;
+  if (!confirm(`Delete your recent messages in #${activeGuildChat.cname}?`)) return;
+  const r = await api(`/api/v1/guilds/${encodeURIComponent(activeGuildChat.gid)}/selfpurge`, {
+    method: "POST",
+    body: { channel_id: activeGuildChat.cid, limit: 40 },
+  });
+  toast(r.detail);
+  openGuildChannelChat(activeGuildChat.gid, activeGuildChat.cid, activeGuildChat.cname, activeGuildChat.gname);
+});
+$("#btn-gmod-run")?.addEventListener("click", async () => {
+  const gid = $("#gmod-gid").value.trim();
+  const user_id = $("#gmod-uid").value.trim();
+  const action = $("#gmod-action").value;
+  const extra = $("#gmod-extra").value.trim();
+  if (!gid || !user_id) return toast("Guild ID and User ID required");
+  if (["kick", "ban"].includes(action) && !confirm(`Confirm ${action} on ${user_id}?`)) return;
+  const body = { action, user_id, reason: extra || "Dashboard action" };
+  if (action === "nick") body.nick = extra;
+  if (action === "role") body.role_id = extra;
+  const r = await api(`/api/v1/guilds/${encodeURIComponent(gid)}/members/action`, { method: "POST", body });
+  toast(r.detail);
+});
+$("#btn-vc-roster")?.addEventListener("click", loadVoiceRoster);
+$("#btn-gwh-list")?.addEventListener("click", async () => {
+  const gid = $("#gwh-gid").value.trim();
+  if (!gid) return toast("Guild ID required");
+  const r = await api(`/api/v1/guilds/${encodeURIComponent(gid)}/webhooks`);
+  $("#gwh-list").innerHTML = (r.webhooks || []).map((w) => `
+    <div class="data-row">
+      <div class="data-main"><div class="data-title">${esc(w.name)} (#${esc(w.channel)})</div><div class="muted mono">${esc(w.id)}</div></div>
+      <div class="inline-actions">
+        <button type="button" class="btn-ghost-sm" data-use-wh="${esc(w.url)}">Use</button>
+        <button type="button" class="btn-danger-tonal sm" data-del-wh="${esc(w.id)}">Del</button>
+      </div>
+    </div>`).join("") || `<div class="muted">No webhooks in this server.</div>`;
+  $$("[data-use-wh]").forEach((b) => b.addEventListener("click", () => {
+    $("#wh-send-url").value = b.dataset.useWh;
+    toast("Webhook URL copied to Sender");
+  }));
+  $$("[data-del-wh]").forEach((b) => b.addEventListener("click", async () => {
+    await api(`/api/v1/guilds/${encodeURIComponent(gid)}/webhooks/${encodeURIComponent(b.dataset.delWh)}`, { method: "DELETE" });
+    $("#btn-gwh-list").click();
+  }));
+});
+$("#btn-gwh-create")?.addEventListener("click", async () => {
+  const gid = $("#gwh-gid").value.trim();
+  const cid = $("#gwh-cid").value.trim();
+  const name = $("#gwh-name").value.trim() || "Globe Hook";
+  if (!gid || !cid) return toast("Guild ID and Channel ID required");
+  await api(`/api/v1/guilds/${encodeURIComponent(gid)}/webhooks`, { method: "POST", body: { channel_id: cid, name } });
+  toast("Webhook created");
+  $("#btn-gwh-list").click();
 });
 
 $("#btn-ov-open-analytics")?.addEventListener("click", () => switchView("analytics"));
@@ -2111,6 +2355,16 @@ async function loadSchedules() {
 }
 
 $("#btn-refresh-sched")?.addEventListener("click", loadSchedules);
+$("#btn-sched-add")?.addEventListener("click", async () => {
+  const channel_id = $("#sched-cid").value.trim();
+  const interval = $("#sched-interval").value.trim();
+  const text = $("#sched-text").value.trim();
+  if (!channel_id || !interval || !text) return toast("Channel ID, interval, and text required");
+  await api("/api/v1/schedules", { method: "POST", body: { channel_id, interval, text } });
+  $("#sched-text").value = "";
+  toast("Schedule created");
+  loadSchedules();
+});
 $("#btn-sys-reload")?.addEventListener("click", async () => {
   const mod = $("#reload-mod").value;
   await api("/api/v1/system", { method: "POST", body: { action: "reload", module: mod } });

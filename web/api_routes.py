@@ -1247,19 +1247,21 @@ def register_routes(
             it.pop("_sf_sort", None)
         return _json({"dms": items[:80]})
 
-    async def dm_messages_get(request: web.Request) -> web.Response:
-        auth.authenticate_request(request)
-        cid = int(request.match_info["id"])
-        limit = max(5, min(int(request.query.get("limit", "40")), 100))
-        before_raw = request.query.get("before", "").strip()
+    async def _resolve_channel(cid: int) -> Any:
         ch = bot.get_channel(cid)
         if not ch:
             try:
                 ch = await bot.fetch_channel(cid)
             except Exception:
                 ch = None
+        return ch
+
+    async def _channel_messages_get(request: web.Request, cid: int) -> web.Response:
+        limit = max(5, min(int(request.query.get("limit", "40")), 100))
+        before_raw = request.query.get("before", "").strip()
+        ch = await _resolve_channel(cid)
         if not ch:
-            return _json({"error": "DM channel not found"}, status=404)
+            return _json({"error": "Channel not found"}, status=404)
 
         kwargs: dict[str, Any] = {"limit": limit, "oldest_first": False}
         if before_raw.isdigit():
@@ -1285,17 +1287,10 @@ def register_routes(
             "recipients": recipients_meta,
         })
 
-    async def dm_messages_post(request: web.Request) -> web.Response:
-        auth.authenticate_request(request, require_csrf=True)
-        cid = int(request.match_info["id"])
-        ch = bot.get_channel(cid)
+    async def _channel_messages_post(request: web.Request, cid: int) -> web.Response:
+        ch = await _resolve_channel(cid)
         if not ch:
-            try:
-                ch = await bot.fetch_channel(cid)
-            except Exception:
-                ch = None
-        if not ch:
-            return _json({"error": "DM channel not found"}, status=404)
+            return _json({"error": "Channel not found"}, status=404)
 
         content = ""
         reply_to = ""
@@ -1345,6 +1340,22 @@ def register_routes(
 
         msg = await ch.send(**send_kwargs)
         return _json({"ok": True, "message": _serialize_dm_msg(msg)})
+
+    async def dm_messages_get(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        return await _channel_messages_get(request, int(request.match_info["id"]))
+
+    async def dm_messages_post(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        return await _channel_messages_post(request, int(request.match_info["id"]))
+
+    async def guild_channel_messages_get(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        return await _channel_messages_get(request, int(request.match_info["cid"]))
+
+    async def guild_channel_messages_post(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        return await _channel_messages_post(request, int(request.match_info["cid"]))
 
     async def export_dm(request: web.Request) -> web.Response:
         auth.authenticate_request(request)
@@ -1413,6 +1424,41 @@ def register_routes(
         tools = bot.get_cog("Tools")
         if not tools:
             return _json({"schedules": []})
+        if request.method == "POST":
+            auth.authenticate_request(request, require_csrf=True)
+            data = await _body(request)
+            cid = int(str(data.get("channel_id", "0") or "0"))
+            interval_str = str(data.get("interval", "")).strip()
+            text = str(data.get("text", "")).strip()[:1900]
+            ch = bot.get_channel(cid)
+            if not ch or not text or not interval_str:
+                return _json({"error": "Valid channel_id, interval, and text required"}, status=400)
+            from modules.tools import _parse_duration
+            secs = _parse_duration(interval_str)
+            if secs is None or secs < 15:
+                return _json({"error": "Minimum interval is 15s (e.g. 30s, 15m, 1h)"}, status=400)
+            tools._schedule_seq += 1
+            sid = tools._schedule_seq
+
+            async def _sched_loop() -> None:
+                try:
+                    while True:
+                        await asyncio.sleep(secs)
+                        try:
+                            await ch.send(text)
+                        except Exception:
+                            pass
+                except asyncio.CancelledError:
+                    pass
+
+            task = asyncio.create_task(_sched_loop())
+            tools._schedules[sid] = {
+                "task": task,
+                "interval": interval_str,
+                "channel": getattr(ch, "name", str(cid)),
+                "text": text[:60],
+            }
+            return _json({"ok": True, "id": sid})
         if request.method == "DELETE":
             auth.authenticate_request(request, require_csrf=True)
             sid = int(request.match_info["id"])
@@ -1650,6 +1696,481 @@ def register_routes(
             "react": [{"user_id": str(u), "emoji": e} for u, e in troll._react_targets.items()],
         })
 
+    # ── Phase 1–5 Expansion: Server Chat/Mod/Voice, Ops Console, Snipers & Assets ──
+
+    async def guild_selfpurge(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        data = await _body(request)
+        cid = int(str(data.get("channel_id", "0") or "0"))
+        limit = max(1, min(int(data.get("limit", 40)), 120))
+        ch = await _resolve_channel(cid)
+        if not ch or not bot.user:
+            return _json({"error": "Channel not found"}, status=404)
+        deleted = 0
+        async for m in ch.history(limit=limit):
+            if m.author.id == bot.user.id:
+                try:
+                    await m.delete()
+                    deleted += 1
+                    await asyncio.sleep(0.32)
+                except Exception:
+                    pass
+        return _json({"ok": True, "deleted": deleted, "detail": f"Deleted {deleted} own message(s)"})
+
+    async def guild_member_action(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        gid = int(request.match_info["id"])
+        guild = bot.get_guild(gid)
+        if not guild:
+            return _json({"error": "Guild not found"}, status=404)
+        data = await _body(request)
+        act = str(data.get("action", "")).lower().strip()
+        uid = int(str(data.get("user_id", "0") or "0"))
+        reason = str(data.get("reason", "")).strip() or "Dashboard action"
+        if not uid:
+            return _json({"error": "Valid user_id required"}, status=400)
+        member = guild.get_member(uid)
+        try:
+            if act == "unban":
+                user_obj = discord.Object(id=uid)
+                await guild.unban(user_obj, reason=reason)
+                return _json({"ok": True, "detail": f"Unbanned {uid}"})
+            if not member:
+                return _json({"error": "Member not cached in guild"}, status=404)
+            if act == "kick":
+                await member.kick(reason=reason)
+            elif act == "ban":
+                await member.ban(reason=reason, delete_message_days=0)
+            elif act == "timeout":
+                from datetime import timedelta
+                mins = max(1, min(int(data.get("minutes", 10)), 10080))
+                await member.timeout(timedelta(minutes=mins), reason=reason)
+            elif act == "nick":
+                nick = str(data.get("nick", "")).strip()[:32] or None
+                await member.edit(nick=nick, reason=reason)
+            elif act == "role":
+                rid = int(str(data.get("role_id", "0") or "0"))
+                role = guild.get_role(rid)
+                if not role:
+                    return _json({"error": "Role not found"}, status=404)
+                if role in member.roles:
+                    await member.remove_roles(role, reason=reason)
+                    return _json({"ok": True, "detail": f"Removed @{role.name} from {member}"})
+                await member.add_roles(role, reason=reason)
+                return _json({"ok": True, "detail": f"Added @{role.name} to {member}"})
+            else:
+                return _json({"error": "Unknown member action"}, status=400)
+            return _json({"ok": True, "detail": f"{act.title()} applied to {member}"})
+        except Exception as exc:
+            return _json({"error": str(exc)}, status=400)
+
+    async def guild_webhooks_handler(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        gid = int(request.match_info["id"])
+        guild = bot.get_guild(gid)
+        if not guild:
+            return _json({"error": "Guild not found"}, status=404)
+        if request.method == "POST":
+            auth.authenticate_request(request, require_csrf=True)
+            data = await _body(request)
+            cid = int(str(data.get("channel_id", "0") or "0"))
+            name = str(data.get("name", "Globe Hook")).strip()[:80] or "Globe Hook"
+            ch = guild.get_channel(cid)
+            if not ch:
+                return _json({"error": "Channel not found in guild"}, status=404)
+            wh = await ch.create_webhook(name=name)
+            return _json({"ok": True, "webhook": {"id": str(wh.id), "name": wh.name, "url": wh.url, "channel": ch.name}})
+        if request.method == "DELETE":
+            auth.authenticate_request(request, require_csrf=True)
+            wid = int(request.match_info["wid"])
+            hooks = await guild.webhooks()
+            target = next((h for h in hooks if h.id == wid), None)
+            if not target:
+                return _json({"error": "Webhook not found"}, status=404)
+            await target.delete()
+            return _json({"ok": True})
+        hooks = await guild.webhooks()
+        return _json({
+            "webhooks": [
+                {"id": str(h.id), "name": h.name, "url": h.url, "channel": getattr(h.channel, "name", "—")}
+                for h in hooks[:40]
+            ]
+        })
+
+    async def guild_clone(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        data = await _body(request)
+        src_id = int(str(data.get("source_id", "0") or "0"))
+        dst_id = int(str(data.get("target_id", "0") or "0"))
+        src = bot.get_guild(src_id)
+        dst = bot.get_guild(dst_id)
+        if not src or not dst or src.id == dst.id:
+            return _json({"error": "Provide distinct valid Source and Target Guild IDs"}, status=400)
+
+        async def _clone_job() -> None:
+            try:
+                for ch in list(dst.channels):
+                    try:
+                        await ch.delete()
+                        await asyncio.sleep(0.35)
+                    except Exception:
+                        pass
+                for r_obj in list(dst.roles):
+                    if not r_obj.is_default() and not r_obj.managed:
+                        try:
+                            await r_obj.delete()
+                            await asyncio.sleep(0.3)
+                        except Exception:
+                            pass
+                for r_obj in reversed(src.roles):
+                    if not r_obj.is_default() and not r_obj.managed:
+                        try:
+                            await dst.create_role(name=r_obj.name, permissions=r_obj.permissions, colour=r_obj.colour, hoist=r_obj.hoist, mentionable=r_obj.mentionable)
+                            await asyncio.sleep(0.35)
+                        except Exception:
+                            pass
+                for cat in src.categories:
+                    try:
+                        ncat = await dst.create_category(name=cat.name)
+                        for ch in cat.channels:
+                            if isinstance(ch, discord.TextChannel):
+                                await dst.create_text_channel(name=ch.name, category=ncat, topic=ch.topic, slowmode_delay=ch.slowmode_delay)
+                            elif isinstance(ch, discord.VoiceChannel):
+                                await dst.create_voice_channel(name=ch.name, category=ncat)
+                            await asyncio.sleep(0.35)
+                    except Exception:
+                        pass
+                await broadcast({"type": "job", "data": {"job": "clone", "done": True, "source": src.name, "target": dst.name}})
+            except Exception as exc:
+                await broadcast({"type": "job", "data": {"job": "clone", "done": True, "error": str(exc)}})
+
+        asyncio.create_task(_clone_job())
+        return _json({"ok": True, "started": True})
+
+    async def voice_roster(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        active = []
+        for g in getattr(bot, "guilds", []) or []:
+            for vc in getattr(g, "voice_channels", []) or []:
+                if getattr(vc, "members", None):
+                    active.append({
+                        "guild_id": str(g.id),
+                        "guild": g.name,
+                        "channel_id": str(vc.id),
+                        "channel": vc.name,
+                        "members": [
+                            {
+                                "id": str(m.id),
+                                "name": getattr(m, "global_name", None) or m.name,
+                                "avatar": str(m.display_avatar.url) if getattr(m, "display_avatar", None) else "",
+                                "mute": bool(getattr(getattr(m, "voice", None), "self_mute", False) or getattr(getattr(m, "voice", None), "mute", False)),
+                                "deaf": bool(getattr(getattr(m, "voice", None), "self_deaf", False) or getattr(getattr(m, "voice", None), "deaf", False)),
+                            }
+                            for m in vc.members[:30]
+                        ],
+                    })
+        return _json({"roster": active[:25]})
+
+    async def voice_extra_control(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        data = await _body(request)
+        act = str(data.get("action", ""))
+        if act == "moveall":
+            src = bot.get_channel(int(str(data.get("source_id", "0") or "0")))
+            dst = bot.get_channel(int(str(data.get("dest_id", "0") or "0")))
+            if not src or not dst:
+                return _json({"error": "Source or destination VC not found"}, status=404)
+            moved = 0
+            for m in list(getattr(src, "members", [])):
+                try:
+                    await m.move_to(dst)
+                    moved += 1
+                    await asyncio.sleep(0.25)
+                except Exception:
+                    pass
+            return _json({"ok": True, "moved": moved})
+        if act == "vckick":
+            gid = int(str(data.get("guild_id", "0") or "0"))
+            uid = int(str(data.get("user_id", "0") or "0"))
+            g = bot.get_guild(gid)
+            m = g.get_member(uid) if g else None
+            if not m or not getattr(m, "voice", None):
+                return _json({"error": "Member not in voice"}, status=404)
+            await m.move_to(None)
+            return _json({"ok": True})
+        return _json({"error": "Invalid voice extra action"}, status=400)
+
+    async def afk_pings_handler(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        if request.method == "DELETE":
+            auth.authenticate_request(request, require_csrf=True)
+            if hasattr(bot, "_afk_pings"):
+                bot._afk_pings.clear()
+            return _json({"ok": True})
+        return _json({
+            "afk": bool(getattr(bot, "_afk_active", False)),
+            "reason": getattr(bot, "_afk_reason", "") or "",
+            "pings": list(getattr(bot, "_afk_pings", []))[::-1],
+        })
+
+    async def intel_esnipes(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        util = bot.get_cog("Utility")
+        rows = []
+        if util and getattr(util, "_edited", None):
+            for cid, dq in util._edited.items():
+                for rec in dq:
+                    rows.append({
+                        "channel_id": str(cid),
+                        "author": str(rec.author),
+                        "before": getattr(rec, "before", "") or "",
+                        "after": getattr(rec, "content", "") or "",
+                        "timestamp": rec.timestamp.timestamp() if getattr(rec, "timestamp", None) else 0,
+                    })
+        rows.sort(key=lambda x: x["timestamp"], reverse=True)
+        return _json({"esnipes": rows[:40]})
+
+    async def intel_snipers(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        tools = bot.get_cog("Tools")
+        return _json({
+            "snipers": list(getattr(tools, "_sniper_logs", []))[::-1] if tools else [],
+            "keyword_hits": list(getattr(tools, "_keyword_hits", []))[::-1] if tools else [],
+        })
+
+    async def system_exec(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        data = await _body(request)
+        raw = str(data.get("command", "")).strip()
+        if not raw:
+            return _json({"error": "Command required"}, status=400)
+        if raw.startswith(settings.prefix):
+            raw = raw[len(settings.prefix):].strip()
+        parts = raw.split()
+        cmd = bot.get_command(parts[0].lower()) if parts else None
+        if not cmd:
+            return _json({"ok": False, "output": [f"Unknown command: {parts[0] if parts else raw}"]})
+
+        captured: list[str] = []
+
+        class _WebMsg:
+            id = 0
+            author = getattr(bot, "user", None)
+            content = f"{settings.prefix}{raw}"
+            guild = None
+            channel = None
+            async def delete(self, **kw: Any) -> None:
+                return None
+            async def reply(self, txt: str = "", **kw: Any) -> Any:
+                if txt:
+                    captured.append(txt)
+                return self
+
+        class _WebCh:
+            id = 0
+            name = "web-console"
+            async def send(self, txt: str = "", **kw: Any) -> Any:
+                if txt:
+                    captured.append(txt)
+                return _WebMsg()
+
+        wch = _WebCh()
+        wmsg = _WebMsg()
+        wmsg.channel = wch
+
+        class _WebCtx:
+            def __init__(self) -> None:
+                self.bot = bot
+                self.command = cmd
+                self.cog = cmd.cog
+                self.author = getattr(bot, "user", None)
+                self.guild = None
+                self.channel = wch
+                self.message = wmsg
+                self.prefix = settings.prefix
+                self.invoked_with = parts[0]
+            async def send(self, content: str = "", **kw: Any) -> Any:
+                if content:
+                    captured.append(str(content))
+                return wmsg
+            async def reply(self, content: str = "", **kw: Any) -> Any:
+                return await self.send(content)
+
+        ctx = _WebCtx()
+        try:
+            args_str = parts[1:]
+            sig_params = list(cmd.clean_params.values())
+            if not sig_params:
+                await cmd.callback(cmd.cog, ctx) if cmd.cog else await cmd.callback(ctx)
+            elif len(sig_params) == 1 and sig_params[0].kind == sig_params[0].KEYWORD_ONLY:
+                val = " ".join(args_str)
+                await cmd.callback(cmd.cog, ctx, **{sig_params[0].name: val}) if cmd.cog else await cmd.callback(ctx, **{sig_params[0].name: val})
+            else:
+                await cmd.callback(cmd.cog, ctx, *args_str) if cmd.cog else await cmd.callback(ctx, *args_str)
+        except Exception as exc:
+            captured.append(f"Error: {exc}")
+        return _json({"ok": True, "command": raw, "output": captured or [f"Executed '{raw}'"]})
+
+    async def invite_inspect(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        tools = bot.get_cog("Tools")
+        if not tools:
+            return _json({"error": "Tools missing"}, status=503)
+        data = await _body(request)
+        code = str(data.get("invite", "")).rstrip("/").split("/")[-1].split("?")[0].strip()
+        if not code:
+            return _json({"error": "Invite code required"}, status=400)
+        resp = await tools._get_http_client().get(f"https://discord.com/api/v9/invites/{code}?with_counts=true&with_expiration=true")
+        if resp.status_code != 200:
+            return _json({"error": f"Discord HTTP {resp.status_code}"}, status=resp.status_code)
+        d = resp.json()
+        g = d.get("guild") or {}
+        inv = d.get("inviter") or {}
+        return _json({
+            "ok": True,
+            "result": {
+                "code": d.get("code"),
+                "guild": g.get("name"),
+                "guild_id": g.get("id"),
+                "members": d.get("approximate_member_count"),
+                "online": d.get("approximate_presence_count"),
+                "vanity": g.get("vanity_url_code"),
+                "boosts": g.get("premium_subscription_count"),
+                "verification_level": g.get("verification_level"),
+                "inviter": inv.get("username"),
+                "expires_at": d.get("expires_at"),
+            },
+        })
+
+    async def steal_emoji(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        tools = bot.get_cog("Tools")
+        if not tools:
+            return _json({"error": "Tools missing"}, status=503)
+        data = await _body(request)
+        gid = int(str(data.get("guild_id", "0") or "0"))
+        name = str(data.get("name", "")).strip()[:32]
+        src = str(data.get("source", "")).strip()
+        guild = bot.get_guild(gid)
+        if not guild or not src:
+            return _json({"error": "Valid guild_id and emoji/URL required"}, status=400)
+        import re as _re
+        m = _re.match(r"<(a?):([A-Za-z0-9_]+):(\d+)>", src)
+        if m:
+            anim, ename, eid = m.groups()
+            ext = "gif" if anim else "png"
+            url = f"https://cdn.discordapp.com/emojis/{eid}.{ext}"
+            name = name or ename
+        elif src.isdigit():
+            url = f"https://cdn.discordapp.com/emojis/{src}.png"
+        else:
+            url = src
+        if not name:
+            name = "stolen_emoji"
+        img_resp = await tools._get_http_client().get(url)
+        if img_resp.status_code != 200:
+            return _json({"error": f"Failed to fetch image (HTTP {img_resp.status_code})"}, status=400)
+        em = await guild.create_custom_emoji(name=name, image=img_resp.content)
+        return _json({"ok": True, "emoji": str(em), "name": em.name, "id": str(em.id)})
+
+    async def translate_tool(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        tools = bot.get_cog("Tools")
+        if not tools:
+            return _json({"error": "Tools missing"}, status=503)
+        data = await _body(request)
+        text = str(data.get("text", "")).strip()[:1500]
+        target = str(data.get("target_lang", "en")).strip()[:10] or "en"
+        if not text:
+            return _json({"error": "Text required"}, status=400)
+        r = await tools._get_http_client().get(
+            "https://translate.googleapis.com/translate_a/single",
+            params={"client": "gtx", "sl": "auto", "tl": target, "dt": "t", "q": text},
+        )
+        arr = r.json()
+        translated = "".join(seg[0] for seg in (arr[0] or []) if seg and seg[0])
+        return _json({"ok": True, "translated": translated, "detected": arr[2] if len(arr) > 2 else "auto"})
+
+    async def qr_tool(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        import base64
+        import qrcode
+        import qrcode.image.svg
+        data = await _body(request)
+        text = str(data.get("text", "")).strip()[:1000]
+        if not text:
+            return _json({"error": "Text or URL required"}, status=400)
+        buf = io.BytesIO()
+        try:
+            img = qrcode.make(text)
+            img.save(buf, format="PNG")
+            mime = "image/png"
+        except Exception:
+            buf = io.BytesIO()
+            img = qrcode.make(text, image_factory=qrcode.image.svg.SvgPathImage)
+            img.save(buf)
+            mime = "image/svg+xml"
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return _json({"ok": True, "data_uri": f"data:{mime};base64,{b64}"})
+
+    async def set_profile_identity(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        tools = bot.get_cog("Tools")
+        token_val = getattr(bot.http, "token", "") or ""
+        if not tools or not token_val:
+            return _json({"error": "Unavailable"}, status=503)
+        data = await _body(request)
+        payload: dict[str, Any] = {}
+        if "global_name" in data:
+            payload["global_name"] = str(data.get("global_name", "")).strip()[:32]
+        if data.get("avatar_url"):
+            import base64
+            img_r = await tools._get_http_client().get(str(data["avatar_url"]).strip())
+            if img_r.status_code != 200:
+                return _json({"error": "Could not download avatar URL"}, status=400)
+            ct = img_r.headers.get("content-type", "image/png").split(";")[0]
+            payload["avatar"] = f"data:{ct};base64,{base64.b64encode(img_r.content).decode('ascii')}"
+        if not payload:
+            return _json({"error": "Provide global_name or avatar_url"}, status=400)
+        r = await tools._get_http_client().patch(
+            "https://discord.com/api/v9/users/@me",
+            headers={"Authorization": token_val},
+            json=payload,
+        )
+        if r.status_code != 200:
+            return _json({"error": f"Discord HTTP {r.status_code}"}, status=r.status_code)
+        return _json({"ok": True})
+
+    async def troll_extra(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        data = await _body(request)
+        act = str(data.get("action", ""))
+        cid = int(str(data.get("channel_id", "0") or "0"))
+        ch = await _resolve_channel(cid)
+        if not ch:
+            return _json({"error": "Channel not found"}, status=404)
+        if act == "faketyping":
+            secs = max(3, min(int(data.get("seconds", 12)), 90))
+            async def _type_job() -> None:
+                async with ch.typing():
+                    await asyncio.sleep(secs)
+            asyncio.create_task(_type_job())
+            return _json({"ok": True, "detail": f"Typing in #{getattr(ch, 'name', cid)} for {secs}s"})
+        if act == "ghostedit":
+            first = str(data.get("text", "...")).strip()[:1800] or "..."
+            edit_to = str(data.get("edit_to", "")).strip()[:1800]
+            delay = max(1.0, min(float(data.get("delay", 3.0)), 30.0))
+            async def _ge_job() -> None:
+                m = await ch.send(first)
+                await asyncio.sleep(delay)
+                if edit_to:
+                    await m.edit(content=edit_to)
+                else:
+                    await m.delete()
+            asyncio.create_task(_ge_job())
+            return _json({"ok": True, "detail": "Ghost-edit dispatched"})
+        return _json({"error": "Unknown tactical action"}, status=400)
+
     # ── Multi-Account Vault & Token Management ────────────────────────────────
 
     async def _verify_discord_token(raw_token: str) -> dict[str, Any]:
@@ -1774,11 +2295,14 @@ def register_routes(
     r.add_post("/api/v1/presence/status", set_online_status)
     r.add_post("/api/v1/presence/activity", set_rich_activity)
     r.add_post("/api/v1/presence/bio", set_bio)
+    r.add_post("/api/v1/presence/profile", set_profile_identity)
     r.add_post("/api/v1/presence/hypesquad", set_hypesquad)
     r.add_post("/api/v1/presence/rotate", set_status_rotate)
     r.add_post("/api/v1/presence/spoofer", control_spoofer)
 
     r.add_get("/api/v1/intel/snipes", get_snipes)
+    r.add_get("/api/v1/intel/esnipes", intel_esnipes)
+    r.add_get("/api/v1/intel/snipers", intel_snipers)
     r.add_get("/api/v1/intel/radar", get_radar)
     r.add_delete("/api/v1/intel/radar", clear_radar)
     r.add_get("/api/v1/intel/stalk", get_stalk)
@@ -1790,25 +2314,42 @@ def register_routes(
     r.add_post("/api/v1/intel/vanity", vanity_handler)
     r.add_delete("/api/v1/intel/vanity", vanity_handler)
     r.add_post("/api/v1/tools/inspect", inspect_tool)
+    r.add_post("/api/v1/tools/invite-inspect", invite_inspect)
+    r.add_post("/api/v1/tools/steal-emoji", steal_emoji)
+    r.add_post("/api/v1/tools/translate", translate_tool)
+    r.add_post("/api/v1/tools/qr", qr_tool)
     r.add_post("/api/v1/tools/encode", encode_tool)
     r.add_get("/api/v1/tools/automation", automation_handler)
     r.add_post("/api/v1/tools/automation", automation_handler)
     r.add_delete("/api/v1/tools/automation", automation_handler)
     r.add_get("/api/v1/troll/control", troll_handler)
     r.add_post("/api/v1/troll/control", troll_handler)
+    r.add_post("/api/v1/troll/extra", troll_extra)
     r.add_get("/api/v1/intel/friends/diff", friends_action)
     r.add_post("/api/v1/intel/friends", friends_action)
     r.add_post("/api/v1/intel/user-profile", profile_user)
 
     r.add_get("/api/v1/guilds", list_guilds)
+    r.add_get("/api/v1/guilds/{id}/channels/{cid}/messages", guild_channel_messages_get)
+    r.add_post("/api/v1/guilds/{id}/channels/{cid}/messages", guild_channel_messages_post)
+    r.add_post("/api/v1/guilds/{id}/selfpurge", guild_selfpurge)
+    r.add_post("/api/v1/guilds/{id}/members/action", guild_member_action)
+    r.add_get("/api/v1/guilds/{id}/webhooks", guild_webhooks_handler)
+    r.add_post("/api/v1/guilds/{id}/webhooks", guild_webhooks_handler)
+    r.add_delete("/api/v1/guilds/{id}/webhooks/{wid}", guild_webhooks_handler)
+    r.add_post("/api/v1/guilds/clone", guild_clone)
     r.add_post("/api/v1/guilds/cleanup", guild_cleanup)
     r.add_post("/api/v1/dispatch/send", dispatch_send)
     r.add_post("/api/v1/dispatch/webhook", dispatch_webhook)
     r.add_get("/api/v1/guilds/{id}/audit", audit_guild)
     r.add_get("/api/v1/guilds/{id}/backup", backup_guild_download)
     r.add_post("/api/v1/guilds/lockdown", guild_lockdown)
+    r.add_get("/api/v1/voice/roster", voice_roster)
     r.add_post("/api/v1/voice", voice_control)
+    r.add_post("/api/v1/voice/extra", voice_extra_control)
 
+    r.add_get("/api/v1/afk/pings", afk_pings_handler)
+    r.add_delete("/api/v1/afk/pings", afk_pings_handler)
     r.add_get("/api/v1/dms", list_dms)
     r.add_get("/api/v1/dms/{id}/messages", dm_messages_get)
     r.add_post("/api/v1/dms/{id}/messages", dm_messages_post)
@@ -1821,5 +2362,7 @@ def register_routes(
     r.add_get("/api/v1/bookmarks", bookmarks_handler)
     r.add_delete("/api/v1/bookmarks/{id}", bookmarks_handler)
     r.add_get("/api/v1/schedules", schedules_handler)
+    r.add_post("/api/v1/schedules", schedules_handler)
     r.add_delete("/api/v1/schedules/{id}", schedules_handler)
     r.add_post("/api/v1/system", system_action)
+    r.add_post("/api/v1/system/exec", system_exec)

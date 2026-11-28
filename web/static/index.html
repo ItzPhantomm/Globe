@@ -357,14 +357,34 @@
           </div>
         </div>
 
-        <div class="bento-card bento-surface stagger-item">
-          <div class="block-head">
-            <div>
-              <h2>Bot logs</h2>
-              <p class="muted">Real-time activity &amp; command feed</p>
+        <div class="bento-split">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Bot logs &amp; command console</h2>
+                <p class="muted">Real-time feed — execute any prefix command directly</p>
+              </div>
+            </div>
+            <div id="log-stream" class="log-stream mono" aria-live="polite"></div>
+            <div class="inline-form">
+              <input id="cmd-exec-input" type="text" placeholder="Run command (e.g. ping, calc 2+2, uptime)" class="mono" />
+              <button type="button" id="btn-cmd-exec" class="btn-expressive sm">Run</button>
             </div>
           </div>
-          <div id="log-stream" class="log-stream mono" aria-live="polite"></div>
+
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>AFK missed pings</h2>
+                <p class="muted">DMs and mentions logged while AFK mode is active</p>
+              </div>
+              <div class="inline-actions">
+                <button type="button" id="btn-afk-refresh" class="btn-ghost-sm">Refresh</button>
+                <button type="button" id="btn-afk-clear" class="btn-danger-tonal sm">Clear</button>
+              </div>
+            </div>
+            <div id="afk-pings-list" class="data-list"></div>
+          </div>
         </div>
       </section>
 
@@ -404,6 +424,17 @@
                   <button id="btn-bio-apply" class="btn-tonal">Save bio</button>
                 </div>
               </div>
+              <div class="spoofer-grid two-col">
+                <div class="field">
+                  <label for="prof-gname">Display name</label>
+                  <input id="prof-gname" type="text" placeholder="Global display name" maxlength="32" />
+                </div>
+                <div class="field">
+                  <label for="prof-avatar-url">Avatar image URL (optional)</label>
+                  <input id="prof-avatar-url" type="url" placeholder="https://..." />
+                </div>
+              </div>
+              <button type="button" id="btn-prof-save" class="btn-tonal">Update profile identity</button>
               <div class="field">
                 <label>HypeSquad House</label>
                 <div class="sliding-seg" id="hypesquad-seg">
@@ -562,9 +593,16 @@
           <div class="bento-card bento-surface stagger-item">
             <div class="block-head">
               <h2>Snipe history</h2>
-              <div class="inline-form compact">
-                <input id="snipe-search" type="search" placeholder="Filter messages" />
-                <button id="btn-snipe-search" class="btn-tonal">Filter</button>
+              <div class="inline-actions">
+                <div class="sliding-seg" id="snipe-mode-seg">
+                  <div class="seg-slider"></div>
+                  <button type="button" class="active" data-snipe-mode="deleted">Deleted</button>
+                  <button type="button" data-snipe-mode="edited">Edited</button>
+                </div>
+                <div class="inline-form compact">
+                  <input id="snipe-search" type="search" placeholder="Filter messages" />
+                  <button id="btn-snipe-search" class="btn-tonal sm">Filter</button>
+                </div>
               </div>
             </div>
             <div id="snipes-list" class="data-list"></div>
@@ -576,6 +614,78 @@
               <button id="btn-radar-clear" class="btn-ghost-sm">Clear</button>
             </div>
             <div id="radar-list" class="data-list"></div>
+          </div>
+        </div>
+
+        <div class="bento-split">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Sniper telemetry</h2>
+                <p class="muted">Nitro gift &amp; Giveaway sniper detections</p>
+              </div>
+            </div>
+            <div id="sniper-hits-list" class="data-list"></div>
+          </div>
+
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Keyword alert hits</h2>
+                <p class="muted">Recent tracked phrase matches</p>
+              </div>
+            </div>
+            <div id="kw-hits-list" class="data-list"></div>
+          </div>
+        </div>
+
+        <div class="bento-split">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Invite OSINT &amp; Emoji stealer</h2>
+                <p class="muted">Inspect invite metadata or clone custom emojis to your server</p>
+              </div>
+            </div>
+            <div class="stack-form">
+              <div class="inline-form">
+                <input id="inv-osint-input" type="text" placeholder="Invite code or discord.gg/..." />
+                <button type="button" id="btn-inv-osint" class="btn-expressive sm">Inspect</button>
+              </div>
+              <pre id="inv-osint-out" class="osint-pre mono" style="max-height:110px;">Ready.</pre>
+              <div class="divider"></div>
+              <div class="spoofer-grid two-col">
+                <input id="steal-guild-id" type="text" placeholder="Target Guild ID" class="mono" />
+                <input id="steal-name" type="text" placeholder="Emoji name" />
+              </div>
+              <div class="inline-form">
+                <input id="steal-src" type="text" placeholder="Emoji <:name:id> or image URL" />
+                <button type="button" id="btn-steal-emoji" class="btn-tonal sm">Steal Emoji</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Translator &amp; QR lab</h2>
+                <p class="muted">Instant translation and PNG QR code generator</p>
+              </div>
+            </div>
+            <div class="stack-form">
+              <div class="inline-form">
+                <input id="tr-lang" type="text" value="en" placeholder="Lang (en, es, fr)" style="max-width:95px;" class="mono" />
+                <input id="tr-text" type="text" placeholder="Text to translate..." />
+                <button type="button" id="btn-tr-run" class="btn-tonal sm">Translate</button>
+              </div>
+              <pre id="tr-out" class="osint-pre mono" style="max-height:90px;">Translation appears here.</pre>
+              <div class="divider"></div>
+              <div class="inline-form">
+                <input id="qr-input" type="text" placeholder="Text or URL for QR..." />
+                <button type="button" id="btn-qr-run" class="btn-expressive sm">Generate QR</button>
+              </div>
+              <img id="qr-preview" class="qr-preview hidden" alt="Generated QR code" />
+            </div>
           </div>
         </div>
 
@@ -760,6 +870,15 @@
                 </div>
               </div>
               <button id="btn-treact-set" class="btn-tonal">Save user reaction</button>
+              <div class="divider"></div>
+              <div class="spoofer-grid two-col">
+                <input id="tact-cid" type="text" placeholder="Channel ID" class="mono" />
+                <input id="tact-text" type="text" placeholder="Ghost-edit text (optional)" />
+              </div>
+              <div class="inline-actions">
+                <button type="button" id="btn-tact-type" class="btn-ghost-sm">Fake Typing (12s)</button>
+                <button type="button" id="btn-tact-ghost" class="btn-tonal sm">Ghost-Edit</button>
+              </div>
             </div>
           </div>
 
@@ -769,6 +888,81 @@
               <span class="muted" id="audit-title">Pick a server below</span>
             </div>
             <div id="audit-output" class="data-list"></div>
+          </div>
+        </div>
+
+        <!-- Phase 1: Live Guild Channel Chat + Member Mod + Webhooks + Voice Roster -->
+        <div class="bento-card m3-hero-card bento-surface stagger-item" id="guild-chat-card">
+          <div class="block-head">
+            <div>
+              <h2 id="gchat-title">Server channel chat</h2>
+              <p id="gchat-sub" class="muted">Expand Channels on any server below and click #channel to chat live</p>
+            </div>
+            <div id="gchat-actions" class="inline-actions hidden">
+              <button type="button" id="btn-gchat-selfpurge" class="btn-danger-tonal sm">Self-Purge (40)</button>
+            </div>
+          </div>
+          <div id="gchat-scroll" class="dm-chat-scroll" style="max-height:280px;background:rgba(8,9,14,0.68);border:1px solid var(--border);border-radius:16px;">
+            <div id="gchat-messages" class="dm-chat-messages">
+              <div class="muted" style="text-align:center;padding:1rem;">No channel selected.</div>
+            </div>
+          </div>
+          <div class="inline-form">
+            <input id="gchat-input" type="text" placeholder="Send message to selected server channel..." maxlength="2000" />
+            <button type="button" id="btn-gchat-send" class="btn-expressive sm">Send</button>
+          </div>
+        </div>
+
+        <div class="bento-split">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Member moderation &amp; roles</h2>
+                <p class="muted">Kick, ban, timeout, nick, or toggle role</p>
+              </div>
+            </div>
+            <div class="stack-form">
+              <div class="spoofer-grid two-col">
+                <input id="gmod-gid" type="text" placeholder="Guild ID" class="mono" />
+                <input id="gmod-uid" type="text" placeholder="Member User ID" class="mono" />
+              </div>
+              <div class="spoofer-grid two-col">
+                <select id="gmod-action">
+                  <option value="timeout">Timeout (10m)</option>
+                  <option value="kick">Kick</option>
+                  <option value="ban">Ban</option>
+                  <option value="unban">Unban</option>
+                  <option value="nick">Set Nick</option>
+                  <option value="role">Toggle Role</option>
+                </select>
+                <input id="gmod-extra" type="text" placeholder="Nick / Role ID / Reason" />
+              </div>
+              <button type="button" id="btn-gmod-run" class="btn-danger-tonal">Execute Action</button>
+            </div>
+          </div>
+
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Guild webhooks &amp; voice roster</h2>
+                <p class="muted">Manage server webhooks or inspect active voice members</p>
+              </div>
+              <button type="button" id="btn-vc-roster" class="btn-ghost-sm">Refresh VC</button>
+            </div>
+            <div class="stack-form">
+              <div class="spoofer-grid two-col">
+                <input id="gwh-gid" type="text" placeholder="Guild ID" class="mono" />
+                <input id="gwh-cid" type="text" placeholder="Channel ID" class="mono" />
+              </div>
+              <div class="inline-form">
+                <input id="gwh-name" type="text" placeholder="Webhook name" />
+                <button type="button" id="btn-gwh-create" class="btn-expressive sm">Create</button>
+                <button type="button" id="btn-gwh-list" class="btn-tonal sm">List</button>
+              </div>
+              <div id="gwh-list" class="data-list" style="max-height:130px;"></div>
+              <div class="divider"></div>
+              <div id="vc-roster-list" class="data-list" style="max-height:140px;"></div>
+            </div>
           </div>
         </div>
 
@@ -1303,6 +1497,16 @@
             <div class="block-head">
               <h2>Recurring schedules</h2>
               <button id="btn-refresh-sched" class="btn-ghost-sm">Refresh</button>
+            </div>
+            <div class="stack-form">
+              <div class="spoofer-grid two-col">
+                <input id="sched-cid" type="text" placeholder="Channel ID" class="mono" />
+                <input id="sched-interval" type="text" placeholder="Interval (e.g. 15m, 1h)" class="mono" />
+              </div>
+              <div class="inline-form">
+                <input id="sched-text" type="text" placeholder="Scheduled message text..." maxlength="1900" />
+                <button type="button" id="btn-sched-add" class="btn-expressive sm">Add</button>
+              </div>
             </div>
             <div id="schedules-list" class="data-list"></div>
           </div>

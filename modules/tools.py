@@ -95,6 +95,7 @@ class Tools(commands.Cog):
         self._stalk_logs: deque[dict[str, Any]] = deque(maxlen=100)
         self._gsniper_enabled: bool = False
         self._gsniper_entered: set[int] = set()
+        self._sniper_logs: deque[dict[str, Any]] = deque(maxlen=60)
         self._schedules: dict[int, dict[str, Any]] = {}
         self._schedule_seq: int = 0
         self._alert_webhook: str | None = None
@@ -1619,9 +1620,13 @@ class Tools(commands.Cog):
                             ms = round((time.monotonic() - t0) * 1000)
                             if resp.status_code == 200:
                                 log_info(f"Nitro sniped in {ms}ms! 🎉")
+                                self._sniper_logs.append({"kind": "nitro", "status": "won", "detail": f"Code {code[:6]}…", "where": f"#{message.channel}", "ms": ms, "ts": int(time.time())})
                                 await message.channel.send(f"🎉 Nitro sniped in `{ms}ms`!")
                             elif resp.status_code == 429:
+                                self._sniper_logs.append({"kind": "nitro", "status": "ratelimit", "detail": f"Code {code[:6]}…", "where": f"#{message.channel}", "ms": ms, "ts": int(time.time())})
                                 log_warn(f"Nitro sniper rate-limited ({ms}ms)")
+                            else:
+                                self._sniper_logs.append({"kind": "nitro", "status": f"http_{resp.status_code}", "detail": f"Code {code[:6]}…", "where": f"#{message.channel}", "ms": ms, "ts": int(time.time())})
                         except Exception as e:
                             log_err(f"Nitro sniper request error: {e}")
 
@@ -1660,6 +1665,7 @@ class Tools(commands.Cog):
                         if not clicked:
                             await message.add_reaction("🎉")
                         footprint.record_action(message.channel.id)
+                        self._sniper_logs.append({"kind": "giveaway", "status": "entered", "detail": f"Msg {message.id}", "where": f"{message.guild.name} #{message.channel}", "ms": 0, "ts": int(time.time())})
                         log_info(f"Giveaway sniper entered {message.id} in #{message.channel}")
                     except Exception:
                         pass
