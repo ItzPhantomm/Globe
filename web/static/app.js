@@ -669,6 +669,8 @@ function connectWS() {
       applyToggles(msg.data);
     } else if (msg.type === "job") {
       handleJobProgress(msg.data);
+    } else if (msg.type === "dm_message") {
+      handleLiveDMMessage(msg.data);
     }
   };
 }
@@ -720,6 +722,8 @@ function handleJobProgress(d) {
   } else if (d.job === "vanity" && d.dropped) {
     toast(`Vanity dropped: ${d.code} — ${d.note}`);
     $("#vanity-badge").textContent = `Dropped: ${d.code}`;
+  } else if (d.job === "quests") {
+    renderQuestsState(d);
   }
 }
 
@@ -779,9 +783,11 @@ function hydratePresenceConfig(pc, sp) {
 const VIEW_TITLES = {
   overview: "Overview",
   presence: "Presence & Games",
+  analytics: "Insights & Traffic",
+  quests: "Orb Quests",
   intel: "Intel & User Lookup",
   servers: "Servers & Voice",
-  dms: "DMs & Rules",
+  dms: "DMs & Live Chat",
   settings: "Settings & Accounts",
 };
 
@@ -800,6 +806,8 @@ function switchView(name, focusSelector = null) {
     syncDockIndicator();
   });
 
+  if (name === "analytics") loadAnalyticsView();
+  if (name === "quests") loadQuestsView(false);
   if (name === "intel") loadIntel();
   if (name === "servers") loadGuilds();
   if (name === "dms") loadDMs();
@@ -1373,7 +1381,573 @@ $("#btn-treact-set")?.addEventListener("click", async () => {
   toast("Auto-react target updated");
 });
 
-// ── 18. DMs, Automation Rules, Webhook & Bookmarks ────────
+$("#btn-ov-open-analytics")?.addEventListener("click", () => switchView("analytics"));
+
+// ── 18A. Insights & Traffic (Messages, Invites, Comparisons) ──
+let analyticsData = null;
+let analyticsMode = "compare24";
+let anPoints = [];
+
+function drawAnalyticsChart() {
+  const grid = $("#an-chart-grid");
+  const barsG = $("#an-chart-bars");
+  const line = $("#an-chart-line");
+  const yestLine = $("#an-chart-yest");
+  const area = $("#an-chart-area");
+  if (!grid || !line || !analyticsData) return;
+
+  const w = 640;
+  const h = 200;
+  const padTop = 20;
+  const padBot = 24;
+  const padX = 32;
+  const usableW = w - padX * 2;
+  const usableH = h - padTop - padBot;
+
+  let rows = [];
+  const hasYest = analyticsMode === "compare24";
+  $("#an-legend-yest-wrap")?.classList.toggle("hidden", !hasYest);
+
+  if (analyticsMode === "compare24") {
+    $("#an-legend-primary").textContent = "Today (Msgs)";
+    rows = (analyticsData.hourly_comparison || []).map((r) => ({
+      label: r.label,
+      val: Number(r.today) || 0,
+      yest: Number(r.yesterday) || 0,
+      unit: "msgs",
+    }));
+  } else if (analyticsMode === "msgs14") {
+    $("#an-legend-primary").textContent = "Daily Messages (14d)";
+    rows = (analyticsData.daily_series || []).map((r) => ({
+      label: r.label,
+      val: Number(r.messages) || 0,
+      yest: null,
+      unit: "msgs",
+    }));
+  } else {
+    $("#an-legend-primary").textContent = "Daily Invites (14d)";
+    rows = (analyticsData.daily_series || []).map((r) => ({
+      label: r.label,
+      val: Number(r.invites) || 0,
+      yest: null,
+      unit: "invites",
+    }));
+  }
+
+  if (!rows.length) return;
+  const maxVal = Math.max(
+    ...rows.map((r) => Math.max(r.val, r.yest || 0)),
+    analyticsMode === "inv14" ? 5 : 10,
+  );
+  const yTicks = [0, Math.round(maxVal / 2), maxVal];
+  grid.innerHTML = yTicks.map((tv) => {
+    const y = padTop + usableH - (tv / maxVal) * usableH;
+    return `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${w - 8}" y2="${y.toFixed(1)}" /><text x="2" y="${(y + 3).toFixed(1)}">${tv}</text>`;
+  }).join("");
+
+  anPoints = rows.map((r, idx) => {
+    const x = rows.length === 1 ? padX + usableW / 2 : padX + (idx / (rows.length - 1)) * usableW;
+    const y = padTop + usableH - (r.val / maxVal) * usableH;
+    const yYest = r.yest !== null ? (padTop + usableH - (r.yest / maxVal) * usableH) : null;
+    return { x, y, yYest, ...r };
+  });
+
+  if (!hasYest) {
+    const bw = Math.max(8, Math.min(22, usableW / Math.max(8, anPoints.length * 1.7)));
+    barsG.innerHTML = anPoints.map((p, idx) => {
+      const bh = Math.max(2, padTop + usableH - p.y);
+      return `<rect class="chart-bar" data-an-idx="${idx}" x="${(p.x - bw / 2).toFixed(1)}" y="${(padTop + usableH - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="5" />`;
+    }).join("");
+    yestLine.setAttribute("d", "");
+  } else {
+    barsG.innerHTML = "";
+    const yPts = anPoints.map((p) => ({ x: p.x, y: p.yYest }));
+    yestLine.setAttribute("d", catmullRomPath(yPts));
+  }
+
+  const d = catmullRomPath(anPoints);
+  line.setAttribute("d", d);
+  area.setAttribute("d", `${d} L${anPoints[anPoints.length - 1].x.toFixed(1)},${(padTop + usableH).toFixed(1)} L${anPoints[0].x.toFixed(1)},${(padTop + usableH).toFixed(1)} Z`);
+}
+
+function initAnalyticsChartHover() {
+  const stage = $("#an-chart-stage");
+  const tip = $("#an-chart-tooltip");
+  const cross = $("#an-chart-cross");
+  const dot = $("#an-chart-dot");
+  const ring = $("#an-chart-ring");
+  if (!stage || stage.dataset.boundHover) return;
+  stage.dataset.boundHover = "1";
+
+  stage.addEventListener("pointermove", (e) => {
+    if (!anPoints.length) return;
+    const r = stage.getBoundingClientRect();
+    const relX = ((e.clientX - r.left) / Math.max(1, r.width)) * 640;
+    let best = anPoints[0];
+    let bestIdx = 0;
+    let minD = Infinity;
+    anPoints.forEach((p, idx) => {
+      const d = Math.abs(p.x - relX);
+      if (d < minD) { minD = d; best = p; bestIdx = idx; }
+    });
+    cross.setAttribute("x1", best.x.toFixed(1));
+    cross.setAttribute("x2", best.x.toFixed(1));
+    cross.classList.remove("hidden");
+    dot.setAttribute("cx", best.x.toFixed(1));
+    dot.setAttribute("cy", best.y.toFixed(1));
+    dot.classList.remove("hidden");
+    ring.setAttribute("cx", best.x.toFixed(1));
+    ring.setAttribute("cy", best.y.toFixed(1));
+    ring.classList.remove("hidden");
+    $$("[data-an-idx]").forEach((b, i) => b.classList.toggle("active", i === bestIdx));
+    tip.textContent = best.yest !== null
+      ? `${best.label} · Today: ${best.val} | Yest: ${best.yest}`
+      : `${best.label} · ${best.val} ${best.unit}`;
+    tip.classList.remove("hidden");
+  });
+
+  stage.addEventListener("pointerleave", () => {
+    cross.classList.add("hidden");
+    dot.classList.add("hidden");
+    ring.classList.add("hidden");
+    tip.classList.add("hidden");
+    $$("[data-an-idx]").forEach((b) => b.classList.remove("active"));
+  });
+}
+
+function setDeltaPill(elId, pct) {
+  const el = $(elId);
+  if (!el) return;
+  const v = Number(pct) || 0;
+  el.classList.remove("up", "down");
+  if (v > 0) {
+    el.classList.add("up");
+    el.textContent = `+${v}% vs yest`;
+  } else if (v < 0) {
+    el.classList.add("down");
+    el.textContent = `${v}% vs yest`;
+  } else {
+    el.textContent = "0% vs yest";
+  }
+}
+
+async function loadAnalyticsView() {
+  initAnalyticsChartHover();
+  const res = await api("/api/v1/analytics");
+  analyticsData = res;
+  const c = res.comparison || {};
+  $("#an-msg-today").textContent = String(c.messages_today ?? 0);
+  $("#an-msg-yest-sub").textContent = `Yesterday: ${c.messages_yesterday ?? 0}`;
+  setDeltaPill("#an-msg-delta", c.messages_delta_pct);
+  $("#an-msg-global").textContent = String(c.messages_global ?? 0);
+  $("#an-dm-sub").textContent = `DMs today: ${c.dms_today ?? 0} (yest: ${c.dms_yesterday ?? 0}) · All: ${c.dms_global ?? 0}`;
+
+  $("#an-inv-today").textContent = String(c.invites_today ?? 0);
+  $("#an-inv-yest-sub").textContent = `Yesterday: ${c.invites_yesterday ?? 0}`;
+  setDeltaPill("#an-inv-delta", c.invites_delta_pct);
+  $("#an-inv-global").textContent = String(c.invites_global ?? 0);
+
+  drawAnalyticsChart();
+
+  const servers = res.top_servers || [];
+  const maxSrv = Math.max(1, ...servers.map((s) => s.count));
+  $("#an-top-servers").innerHTML = servers.length
+    ? servers.map((s, idx) => `
+      <div class="rank-item">
+        <div class="rank-top">
+          <div class="rank-peer">
+            ${s.icon ? `<img class="avatar" src="${esc(s.icon)}" alt="" />` : `<span class="rank-avatar-fallback">${esc((s.name || "S")[0].toUpperCase())}</span>`}
+            <div style="min-width:0;">
+              <div class="data-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">#${idx + 1} ${esc(s.name)}</div>
+              <div class="muted mono">${s.today_count} today · ${s.share_pct}% share</div>
+            </div>
+          </div>
+          <span class="gold-chip mono">${s.count} msgs</span>
+        </div>
+        <div class="rank-bar-track"><div class="rank-bar-fill" style="width:${Math.max(4, Math.round((s.count / maxSrv) * 100))}%"></div></div>
+      </div>`).join("")
+    : `<div class="muted">No server message activity logged yet.</div>`;
+
+  const contacts = res.top_contacts || [];
+  const maxCtc = Math.max(1, ...contacts.map((u) => u.total));
+  $("#an-top-contacts").innerHTML = contacts.length
+    ? contacts.map((u, idx) => `
+      <div class="rank-item">
+        <div class="rank-top">
+          <div class="rank-peer">
+            ${u.avatar ? `<img class="avatar" src="${esc(u.avatar)}" alt="" />` : `<span class="rank-avatar-fallback">${esc((u.name || "U")[0].toUpperCase())}</span>`}
+            <div style="min-width:0;">
+              <div class="data-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">#${idx + 1} ${esc(u.name)}</div>
+              <div class="muted mono">Sent ${u.sent} · Recv ${u.received} · ${u.today_count} today</div>
+            </div>
+          </div>
+          <div class="inline-actions">
+            <span class="mini-tag gold mono">${u.total}</span>
+            <button type="button" class="btn-ghost-sm" data-open-dm-id="${esc(u.channel_id)}" data-open-dm-name="${esc(u.name)}" data-open-dm-uid="${esc(u.user_id)}" data-open-dm-av="${esc(u.avatar)}">Chat →</button>
+          </div>
+        </div>
+        <div class="rank-bar-track"><div class="rank-bar-fill" style="width:${Math.max(4, Math.round((u.total / maxCtc) * 100))}%"></div></div>
+      </div>`).join("")
+    : `<div class="muted">No DM contact stats recorded yet.</div>`;
+
+  $$("[data-open-dm-id]").forEach((btn) => btn.addEventListener("click", () => {
+    switchView("dms");
+    openDMChat({
+      id: btn.dataset.openDmId,
+      global_name: btn.dataset.openDmName,
+      recipient: btn.dataset.openDmName,
+      recipient_id: btn.dataset.openDmUid,
+      avatar: btn.dataset.openDmAv,
+    });
+  }));
+
+  const invs = res.recent_invites || [];
+  $("#an-recent-invites").innerHTML = invs.length
+    ? invs.map((iv) => `
+      <div class="data-row">
+        <div class="data-main">
+          <div class="data-title"><span class="mini-tag gold mono">${esc(iv.kind)}</span> discord.gg/${esc(iv.code)}</div>
+          <div class="muted mono">${esc(iv.guild_name)} · ${new Date(iv.timestamp * 1000).toLocaleString()}</div>
+        </div>
+      </div>`).join("")
+    : `<div class="muted">No shared or created invites tracked yet.</div>`;
+}
+
+$$("#an-mode-seg button").forEach((b) => {
+  b.addEventListener("click", () => {
+    analyticsMode = b.dataset.anMode;
+    drawAnalyticsChart();
+  });
+});
+$("#btn-an-refresh")?.addEventListener("click", loadAnalyticsView);
+
+// ── 18B. Discord Orb Quest Completor ─────────────────────
+function renderQuestsState(q) {
+  if (!q) return;
+  $("#q-orb-balance").textContent = `${q.orb_balance ?? 0} Orbs`;
+  $("#q-pending-count").textContent = String(q.pending_eligible_count ?? 0);
+  $("#q-earned-stat").textContent = `+${q.completed_session_orbs ?? 0} / ${q.completed_total_orbs ?? 0}`;
+  $("#q-runner-state").textContent = q.running ? "Running" : "Standby";
+  $("#q-status-chip").textContent = q.running ? "Active" : "Standby";
+  $("#q-status-line").textContent = q.status_line || "Ready to process pending Orb quests";
+
+  const cfg = q.config || {};
+  $("#q-cfg-orbs")?.setAttribute("aria-pressed", String(cfg.orbs_only !== false));
+  $("#q-cfg-enroll")?.setAttribute("aria-pressed", String(cfg.auto_enroll !== false));
+  setSegActive("#q-pace-seg", "pace", cfg.pace_mode || "stealth");
+  const allowed = new Set(cfg.allowed_tasks || []);
+  $$("#q-task-chips input[type=checkbox]").forEach((cb) => {
+    cb.checked = allowed.size === 0 || allowed.has(cb.value);
+  });
+
+  const quests = q.quests || [];
+  const orbsOnly = cfg.orbs_only !== false;
+  const visible = orbsOnly ? quests.filter((it) => it.is_orbs) : quests;
+  $("#quests-list").innerHTML = visible.length
+    ? visible.map((it) => {
+      const isRun = it.id === q.current_quest_id;
+      const cls = isRun ? "quest-card is-running" : (it.completed ? "quest-card is-done" : "quest-card");
+      return `
+        <div class="${cls}">
+          <div class="quest-top">
+            <div style="min-width:0;flex:1;">
+              <div class="data-title">${esc(it.name)} <span class="muted">(${esc(it.game_name)})</span></div>
+              <div class="quest-meta" style="margin-top:0.25rem;">
+                <span class="mini-tag gold mono">${esc(it.reward_label)}</span>
+                <span class="mini-tag mono">${esc(it.task_type || "TASK")}</span>
+                <span class="mini-tag">${it.completed ? "Completed" : (isRun ? "Active" : (it.enrolled ? "Enrolled" : "Pending"))}</span>
+              </div>
+            </div>
+            <span class="mono gold-text" style="font-weight:700;">${it.pct}%</span>
+          </div>
+          <div class="wavy-track"><div class="wavy-fill" style="width:${it.pct}%;"></div></div>
+          <div class="muted mono" style="font-size:0.74rem;">${Math.round(it.seconds_done)}s / ${it.seconds_needed}s</div>
+        </div>`;
+    }).join("")
+    : `<div class="muted">No active ${orbsOnly ? "Orb " : ""}quests available right now.</div>`;
+}
+
+async function loadQuestsView(sync = true) {
+  try {
+    const res = await api(`/api/v1/quests?sync=${sync ? "1" : "0"}`);
+    renderQuestsState(res);
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+$("#q-cfg-orbs")?.addEventListener("click", () => {
+  const b = $("#q-cfg-orbs");
+  b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true"));
+});
+$("#q-cfg-enroll")?.addEventListener("click", () => {
+  const b = $("#q-cfg-enroll");
+  b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true"));
+});
+$("#btn-quest-cfg-save")?.addEventListener("click", async () => {
+  const orbs_only = $("#q-cfg-orbs")?.getAttribute("aria-pressed") === "true";
+  const auto_enroll = $("#q-cfg-enroll")?.getAttribute("aria-pressed") === "true";
+  const pace_mode = $("#q-pace-seg button.active")?.dataset.pace || "stealth";
+  const allowed_tasks = $$("#q-task-chips input[type=checkbox]:checked").map((cb) => cb.value);
+  const res = await api("/api/v1/quests/config", {
+    method: "POST",
+    body: { orbs_only, auto_enroll, pace_mode, allowed_tasks },
+  });
+  renderQuestsState(res);
+  toast("Quest configuration saved");
+});
+$("#btn-quest-sync")?.addEventListener("click", async () => {
+  await loadQuestsView(true);
+  toast("Synced live quests & Orbs balance");
+});
+$("#btn-quest-start")?.addEventListener("click", async () => {
+  try {
+    const res = await api("/api/v1/quests/start", { method: "POST" });
+    renderQuestsState(res);
+    toast("Orb Quest Completor started");
+  } catch (err) {
+    toast(err.message);
+  }
+});
+$("#btn-quest-stop")?.addEventListener("click", async () => {
+  const res = await api("/api/v1/quests/stop", { method: "POST" });
+  renderQuestsState(res);
+  toast("Stopping Quest Completor...");
+});
+
+// ── 18C. Interactive Side-by-Side DMs Chat, Files, Reply, Mention ──
+let dmCache = [];
+let activeDM = null;
+let dmMessages = [];
+let dmHasMore = false;
+let dmReplyTarget = null;
+let dmPendingFiles = [];
+
+function renderDMConversationList() {
+  const q = ($("#dm-search-input")?.value || "").trim().toLowerCase();
+  const filtered = q
+    ? dmCache.filter((d) => (d.global_name + " " + d.recipient + " " + d.id).toLowerCase().includes(q))
+    : dmCache;
+  $("#dms-list").innerHTML = filtered.length
+    ? filtered.map((d) => {
+      const actCls = activeDM && activeDM.id === d.id ? " active" : "";
+      const av = d.avatar
+        ? `<img class="avatar" src="${esc(d.avatar)}" alt="" />`
+        : `<span class="rank-avatar-fallback">${esc((d.global_name || d.recipient || "D")[0].toUpperCase())}</span>`;
+      return `
+        <button type="button" class="dm-conv-item${actCls}" data-dm-open="${esc(d.id)}">
+          ${av}
+          <div class="dm-conv-meta">
+            <div class="dm-conv-title">${esc(d.global_name || d.recipient)}</div>
+            <div class="dm-conv-preview">${esc(d.preview || d.recipient)}</div>
+          </div>
+        </button>`;
+    }).join("")
+    : `<div class="muted" style="padding:0.5rem;">No DM conversations found.</div>`;
+
+  $$("[data-dm-open]").forEach((btn) => btn.addEventListener("click", () => {
+    const item = dmCache.find((x) => x.id === btn.dataset.dmOpen);
+    if (item) openDMChat(item);
+  }));
+}
+
+function renderDMReplyBanner() {
+  const bar = $("#dm-reply-bar");
+  if (!dmReplyTarget) {
+    bar?.classList.add("hidden");
+    return;
+  }
+  bar?.classList.remove("hidden");
+  $("#dm-reply-preview").textContent = `${dmReplyTarget.author}: ${dmReplyTarget.content || "[Attachment]"}`;
+}
+
+function renderDMAttachBar() {
+  const bar = $("#dm-attach-bar");
+  if (!dmPendingFiles.length) {
+    bar?.classList.add("hidden");
+    bar.innerHTML = "";
+    return;
+  }
+  bar?.classList.remove("hidden");
+  bar.innerHTML = dmPendingFiles.map((f, idx) => `
+    <span class="kw-item">${esc(f.name)} (${Math.max(1, Math.round(f.size / 1024))} KB)<button type="button" data-rm-file="${idx}">×</button></span>
+  `).join("");
+  $$("[data-rm-file]").forEach((b) => b.addEventListener("click", () => {
+    dmPendingFiles.splice(Number(b.dataset.rmFile), 1);
+    renderDMAttachBar();
+  }));
+}
+
+function renderDMMessageHTML(m) {
+  const av = m.avatar
+    ? `<img class="avatar" src="${esc(m.avatar)}" alt="" />`
+    : `<span class="rank-avatar-fallback">${esc((m.global_name || m.author || "U")[0].toUpperCase())}</span>`;
+  const replyHtml = m.reply_to
+    ? `<div class="dm-reply-quote">↩ ${esc(m.reply_to.author)}: ${esc(m.reply_to.content)}</div>`
+    : "";
+  const attHtml = (m.attachments || []).length
+    ? `<div class="dm-att-grid">${m.attachments.map((a) => (
+      a.is_image
+        ? `<a href="${esc(a.url)}" target="_blank" rel="noopener"><img class="dm-att-img" src="${esc(a.url)}" alt="${esc(a.filename)}" /></a>`
+        : `<a class="dm-att-file" href="${esc(a.url)}" target="_blank" rel="noopener">📎 ${esc(a.filename)}</a>`
+    )).join("")}</div>`
+    : "";
+  const embHtml = (m.embeds || []).length
+    ? m.embeds.map((e) => `<div class="dossier-bio" style="margin-top:0.2rem;">${e.title ? `<strong>${esc(e.title)}</strong>\n` : ""}${esc(e.description)}</div>`).join("")
+    : "";
+
+  return `
+    <div class="dm-msg${m.is_self ? " self" : ""}" data-msg-id="${esc(m.id)}">
+      ${av}
+      <div class="dm-msg-body">
+        ${replyHtml}
+        <div class="dm-msg-top">
+          <div>
+            <span class="dm-msg-author">${esc(m.global_name || m.author)}</span>
+            <span class="muted mono" style="font-size:0.72rem;margin-left:0.4rem;">${esc(m.created_at || "")}</span>
+          </div>
+          <div class="dm-msg-actions">
+            <button type="button" class="dm-msg-act-btn" data-reply-msg="${esc(m.id)}">Reply</button>
+            <button type="button" class="dm-msg-act-btn" data-mention-uid="${esc(m.author_id)}">@Mention</button>
+          </div>
+        </div>
+        ${m.content ? `<div class="dm-msg-text">${esc(m.content)}</div>` : ""}
+        ${attHtml}
+        ${embHtml}
+      </div>
+    </div>`;
+}
+
+function bindDMMessageActions() {
+  $$("[data-reply-msg]").forEach((btn) => btn.addEventListener("click", () => {
+    const found = dmMessages.find((x) => x.id === btn.dataset.replyMsg);
+    if (!found) return;
+    dmReplyTarget = { id: found.id, author: found.global_name || found.author, content: found.content };
+    renderDMReplyBanner();
+    $("#dm-compose-input")?.focus();
+  }));
+  $$("[data-mention-uid]").forEach((btn) => btn.addEventListener("click", () => {
+    const inp = $("#dm-compose-input");
+    if (!inp || !btn.dataset.mentionUid) return;
+    inp.value = `${inp.value}<@${btn.dataset.mentionUid}> `;
+    inp.focus();
+  }));
+}
+
+function renderDMThread(scrollBottom = true) {
+  const container = $("#dm-chat-messages");
+  const scroller = $("#dm-chat-scroll");
+  if (!container) return;
+  $("#dm-load-more-wrap")?.classList.toggle("hidden", !dmHasMore);
+  container.innerHTML = dmMessages.length
+    ? dmMessages.map(renderDMMessageHTML).join("")
+    : `<div class="muted" style="padding:1.2rem 0;text-align:center;">No messages yet in this conversation.</div>`;
+  bindDMMessageActions();
+  if (scrollBottom && scroller) scroller.scrollTop = scroller.scrollHeight;
+}
+
+async function openDMChat(dmItem) {
+  activeDM = dmItem;
+  dmReplyTarget = null;
+  renderDMReplyBanner();
+  renderDMConversationList();
+
+  $("#dm-peer-name").textContent = dmItem.global_name || dmItem.recipient;
+  $("#dm-peer-sub").textContent = `${dmItem.recipient} · ID ${dmItem.id}`;
+  const avEl = $("#dm-peer-avatar");
+  if (avEl) {
+    if (dmItem.avatar) {
+      avEl.src = dmItem.avatar;
+      avEl.classList.remove("hidden");
+    } else {
+      avEl.classList.add("hidden");
+    }
+  }
+  $("#dm-peer-actions")?.classList.remove("hidden");
+  $("#btn-dm-export")?.setAttribute("href", `/api/v1/dms/${encodeURIComponent(dmItem.id)}/export`);
+  $("#dispatch-channel").value = dmItem.id;
+
+  $("#dm-chat-messages").innerHTML = `<div class="muted" style="padding:1rem;text-align:center;">Loading messages...</div>`;
+  try {
+    const res = await api(`/api/v1/dms/${encodeURIComponent(dmItem.id)}/messages?limit=40`);
+    dmMessages = res.messages || [];
+    dmHasMore = Boolean(res.has_more);
+    renderDMThread(true);
+  } catch (err) {
+    $("#dm-chat-messages").innerHTML = `<div class="muted" style="padding:1rem;text-align:center;">Could not load history: ${esc(err.message)}</div>`;
+  }
+}
+
+function handleLiveDMMessage(m) {
+  if (!m || !m.channel_id) return;
+  const idx = dmCache.findIndex((x) => x.id === m.channel_id);
+  if (idx >= 0) {
+    const item = dmCache.splice(idx, 1)[0];
+    item.preview = m.content || "[Attachment]";
+    item.last_ms = m.ts_ms || Date.now();
+    dmCache.unshift(item);
+    if ($("#view-dms")?.classList.contains("active")) renderDMConversationList();
+  }
+  if (activeDM && activeDM.id === m.channel_id) {
+    if (!dmMessages.some((x) => x.id === m.id)) {
+      dmMessages.push(m);
+      renderDMThread(true);
+    }
+  }
+}
+
+async function sendDMChat() {
+  if (!activeDM) return toast("Select a DM conversation first");
+  const inp = $("#dm-compose-input");
+  const text = (inp?.value || "").trim();
+  if (!text && !dmPendingFiles.length) return;
+  const btn = $("#btn-dm-send");
+  if (btn) btn.disabled = true;
+
+  try {
+    let data;
+    if (dmPendingFiles.length) {
+      const fd = new FormData();
+      if (text) fd.append("content", text);
+      if (dmReplyTarget) {
+        fd.append("reply_to", dmReplyTarget.id);
+        fd.append("mention_author", $("#dm-reply-ping")?.checked ? "true" : "false");
+      }
+      dmPendingFiles.forEach((f) => fd.append("file", f));
+      const resp = await fetch(`/api/v1/dms/${encodeURIComponent(activeDM.id)}/messages`, {
+        method: "POST",
+        headers: CSRF ? { "X-Globe-CSRF": CSRF } : {},
+        body: fd,
+        credentials: "same-origin",
+      });
+      data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    } else {
+      data = await api(`/api/v1/dms/${encodeURIComponent(activeDM.id)}/messages`, {
+        method: "POST",
+        body: {
+          content: text,
+          reply_to: dmReplyTarget ? dmReplyTarget.id : "",
+          mention_author: $("#dm-reply-ping")?.checked ?? true,
+        },
+      });
+    }
+    if (inp) inp.value = "";
+    dmPendingFiles = [];
+    dmReplyTarget = null;
+    renderDMAttachBar();
+    renderDMReplyBanner();
+    if (data.message && !dmMessages.some((x) => x.id === data.message.id)) {
+      dmMessages.push(data.message);
+      renderDMThread(true);
+    }
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function loadDMs() {
   const [dmRes, bmRes, autoRes] = await Promise.all([
     api("/api/v1/dms"),
@@ -1381,31 +1955,11 @@ async function loadDMs() {
     api("/api/v1/tools/automation"),
   ]);
 
-  $("#dms-list").innerHTML = dmRes.dms.length
-    ? dmRes.dms.map((d) => `
-    <div class="data-row">
-      <div class="data-main">
-        <div class="data-title">${esc(d.recipient)}</div>
-        <div class="muted mono">${esc(d.id)}</div>
-      </div>
-      <div class="inline-actions">
-        <button class="btn-ghost-sm" data-use-dm="${esc(d.id)}">Use</button>
-        <a class="m3-pill-btn" href="/api/v1/dms/${esc(d.id)}/export" style="text-decoration:none;">Export</a>
-        <button class="btn-danger-tonal sm" data-wipedm="${esc(d.id)}" data-name="${esc(d.recipient)}">Wipe</button>
-      </div>
-    </div>`).join("")
-    : `<div class="muted">No open DM channels cached.</div>`;
-
-  $$("[data-use-dm]").forEach((b) => b.addEventListener("click", () => {
-    $("#dispatch-channel").value = b.dataset.useDm;
-    $("#dispatch-content").focus();
-  }));
-
-  $$("[data-wipedm]").forEach((b) => b.addEventListener("click", async () => {
-    if (!confirm(`Delete all your messages in DM with ${b.dataset.name}?`)) return;
-    await api(`/api/v1/dms/${b.dataset.wipedm}/wipe`, { method: "POST" });
-    toast("DM cleanup started");
-  }));
+  dmCache = dmRes.dms || [];
+  renderDMConversationList();
+  if (!activeDM && dmCache.length) {
+    openDMChat(dmCache[0]);
+  }
 
   const arRows = [];
   (autoRes.autoreact || []).forEach((x) => arRows.push(`<div class="data-row"><div class="data-main"><div class="data-title">React #${esc(x.channel_id)}</div><div class="muted">${esc(x.emojis.join(" "))}</div></div><button class="btn-ghost-sm" data-clr-react="${esc(x.channel_id)}">Clear</button></div>`));
@@ -1437,6 +1991,52 @@ async function loadDMs() {
     loadDMs();
   }));
 }
+
+$("#dm-search-input")?.addEventListener("input", renderDMConversationList);
+$("#btn-dm-refresh")?.addEventListener("click", loadDMs);
+$("#btn-dm-mention")?.addEventListener("click", () => {
+  const inp = $("#dm-compose-input");
+  if (!inp || !activeDM) return;
+  const tag = activeDM.recipient_id ? `<@${activeDM.recipient_id}> ` : `@${activeDM.global_name || activeDM.recipient} `;
+  inp.value = `${inp.value}${tag}`;
+  inp.focus();
+});
+$("#btn-dm-wipe")?.addEventListener("click", async () => {
+  if (!activeDM) return;
+  if (!confirm(`Delete all your messages in DM with ${activeDM.recipient}?`)) return;
+  await api(`/api/v1/dms/${encodeURIComponent(activeDM.id)}/wipe`, { method: "POST" });
+  toast("DM cleanup started");
+});
+$("#btn-dm-load-more")?.addEventListener("click", async () => {
+  if (!activeDM || !dmMessages.length) return;
+  const oldest = dmMessages[0].id;
+  const scroller = $("#dm-chat-scroll");
+  const prevHeight = scroller?.scrollHeight || 0;
+  const res = await api(`/api/v1/dms/${encodeURIComponent(activeDM.id)}/messages?limit=40&before=${encodeURIComponent(oldest)}`);
+  const older = res.messages || [];
+  dmHasMore = Boolean(res.has_more);
+  dmMessages = [...older, ...dmMessages];
+  renderDMThread(false);
+  if (scroller) scroller.scrollTop = scroller.scrollHeight - prevHeight;
+});
+$("#btn-dm-reply-cancel")?.addEventListener("click", () => {
+  dmReplyTarget = null;
+  renderDMReplyBanner();
+});
+$("#btn-dm-attach")?.addEventListener("click", () => $("#dm-file-input")?.click());
+$("#dm-file-input")?.addEventListener("change", (e) => {
+  const files = Array.from(e.target.files || []);
+  dmPendingFiles.push(...files);
+  e.target.value = "";
+  renderDMAttachBar();
+});
+$("#btn-dm-send")?.addEventListener("click", sendDMChat);
+$("#dm-compose-input")?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendDMChat();
+  }
+});
 
 $("#btn-ar-react")?.addEventListener("click", async () => {
   const channel_id = $("#ar-ch-id").value.trim();

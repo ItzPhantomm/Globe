@@ -5,6 +5,8 @@ Built on discord.py-self with prefix 'g.'
 
 from __future__ import annotations
 
+import asyncio
+import re
 import sys
 import traceback
 from typing import TYPE_CHECKING
@@ -14,6 +16,8 @@ from discord.ext import commands
 
 from config import settings
 from ui import log_info, log_warn, log_err, log_event, log_cmd
+
+_INVITE_RE = re.compile(r"(?:https?://)?(?:www\.)?(?:discord\.gg|discord\.com/invite|discordapp\.com/invite)/([A-Za-z0-9-]+)", re.IGNORECASE)
 
 if TYPE_CHECKING:
     pass
@@ -161,6 +165,21 @@ class GlobeBot(commands.Bot):
         log_err(f"Unhandled error in {ctx.command}: {error}")
         traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
 
+    async def on_invite_create(self, invite: discord.Invite) -> None:
+        """Track server invites created by the active account."""
+        try:
+            inviter = getattr(invite, "inviter", None)
+            if self.user and inviter and inviter.id == self.user.id:
+                from data.tracker import tracker
+                tracker.record_invite(
+                    user_id=self.user.id,
+                    guild_id=invite.guild.id if getattr(invite, "guild", None) else 0,
+                    code=invite.code,
+                    kind="created",
+                )
+        except Exception:
+            pass
+
     # ── Message handler ────────────────────────────────────────────────────────
 
     async def on_message(self, message: discord.Message) -> None:
@@ -173,8 +192,50 @@ class GlobeBot(commands.Bot):
                     guild_id=message.guild.id if message.guild else None,
                     channel_id=message.channel.id,
                 )
+                if message.author.id == self.user.id and message.content:
+                    for code in _INVITE_RE.findall(message.content):
+                        tracker.record_invite(
+                            user_id=self.user.id,
+                            guild_id=message.guild.id if message.guild else None,
+                            code=code,
+                            kind="shared",
+                        )
             except Exception:
                 pass
+
+        # Broadcast real-time DM messages to active web dashboard chat sessions
+        if message.guild is None:
+            cb = getattr(self, "_dashboard_broadcast", None)
+            if cb:
+                try:
+                    atts = [
+                        {
+                            "filename": a.filename,
+                            "url": a.url,
+                            "content_type": getattr(a, "content_type", "") or "",
+                            "is_image": str(getattr(a, "content_type", "") or "").startswith("image/"),
+                            "size": getattr(a, "size", 0),
+                        }
+                        for a in getattr(message, "attachments", [])
+                    ]
+                    payload = {
+                        "type": "dm_message",
+                        "data": {
+                            "id": str(message.id),
+                            "channel_id": str(message.channel.id),
+                            "author_id": str(message.author.id),
+                            "author": str(message.author),
+                            "global_name": getattr(message.author, "global_name", None) or message.author.name,
+                            "avatar": str(message.author.display_avatar.url) if getattr(message.author, "display_avatar", None) else "",
+                            "is_self": bool(self.user and message.author.id == self.user.id),
+                            "content": message.content or "",
+                            "ts_ms": int(message.created_at.timestamp() * 1000) if message.created_at else 0,
+                            "attachments": atts,
+                        },
+                    }
+                    asyncio.create_task(cb(payload))
+                except Exception:
+                    pass
 
         # AFK auto-reply + missed-ping digest (5m per-user/channel cooldown)
         if self._afk_active and self.user and message.author.id != self.user.id:

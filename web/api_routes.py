@@ -6,6 +6,7 @@ Provides direct, authenticated JSON control over every cog and runtime subsystem
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import random
@@ -1123,18 +1124,196 @@ def register_routes(
 
     # ── DMs, Bookmarks, Schedules & System ────────────────────────────────────
 
+    def _snowflake_ms(sf: Any) -> int:
+        try:
+            val = int(sf or 0)
+            return ((val >> 22) + 1420070400000) if val > 0 else 0
+        except Exception:
+            return 0
+
+    def _serialize_dm_msg(m: Any) -> dict[str, Any]:
+        ref_info = None
+        ref = getattr(m, "reference", None)
+        if ref and getattr(ref, "resolved", None) and isinstance(ref.resolved, discord.Message):
+            rm = ref.resolved
+            ref_info = {
+                "id": str(rm.id),
+                "author": getattr(rm.author, "global_name", None) or getattr(rm.author, "name", None) or str(rm.author),
+                "content": (rm.content or "[Attachment]")[:120],
+            }
+        elif ref and getattr(ref, "message_id", None):
+            ref_info = {"id": str(ref.message_id), "author": "Message", "content": "Referenced message"}
+        atts = [
+            {
+                "filename": a.filename,
+                "url": a.url,
+                "content_type": getattr(a, "content_type", "") or "",
+                "is_image": str(getattr(a, "content_type", "") or "").startswith("image/")
+                or str(a.filename).lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")),
+                "size": getattr(a, "size", 0),
+            }
+            for a in (getattr(m, "attachments", []) or [])
+        ]
+        embeds = [
+            {"title": e.title or "", "description": (e.description or "")[:300]}
+            for e in (getattr(m, "embeds", []) or [])[:3]
+        ]
+        return {
+            "id": str(m.id),
+            "channel_id": str(m.channel.id),
+            "author_id": str(m.author.id),
+            "author": str(m.author),
+            "global_name": getattr(m.author, "global_name", None) or getattr(m.author, "name", None) or str(m.author),
+            "avatar": str(m.author.display_avatar.url) if getattr(m.author, "display_avatar", None) else "",
+            "is_self": bool(getattr(bot, "user", None) and m.author.id == bot.user.id),
+            "content": m.content or "",
+            "created_at": m.created_at.strftime("%H:%M") if getattr(m, "created_at", None) else "",
+            "ts_ms": int(m.created_at.timestamp() * 1000) if getattr(m, "created_at", None) else _snowflake_ms(m.id),
+            "attachments": atts,
+            "embeds": embeds,
+            "reply_to": ref_info,
+        }
+
     async def list_dms(request: web.Request) -> web.Response:
         auth.authenticate_request(request)
-        out = []
+        from data.tracker import tracker
+        dm_ts = tracker.get_dm_last_activity()
+        items = []
         for ch in getattr(bot, "private_channels", []) or []:
-            if isinstance(ch, discord.DMChannel) and ch.recipient:
-                out.append({
-                    "id": str(ch.id),
-                    "recipient": str(ch.recipient),
-                    "recipient_id": str(ch.recipient.id),
-                    "avatar": str(ch.recipient.display_avatar.url) if ch.recipient.display_avatar else "",
-                })
-        return _json({"dms": out[:60]})
+            is_dm = isinstance(ch, discord.DMChannel) and ch.recipient
+            is_group = isinstance(ch, discord.GroupChannel)
+            if not (is_dm or is_group):
+                continue
+            last_sf = getattr(ch, "last_message_id", None)
+            last_ms = max(_snowflake_ms(last_sf), int(dm_ts.get(ch.id, 0.0) * 1000), _snowflake_ms(ch.id))
+            last_msg = getattr(ch, "last_message", None)
+            preview = (getattr(last_msg, "content", "") or "")[:72] if last_msg else ""
+            if is_dm:
+                rec = ch.recipient
+                label = getattr(rec, "global_name", None) or getattr(rec, "name", None) or str(rec)
+                uname = str(rec)
+                rid = str(rec.id)
+                av = str(rec.display_avatar.url) if rec.display_avatar else ""
+            else:
+                label = getattr(ch, "name", None) or f"Group ({len(getattr(ch, 'recipients', []))})"
+                uname = f"{len(getattr(ch, 'recipients', []))} members"
+                rid = ""
+                av = str(ch.icon.url) if getattr(ch, "icon", None) else ""
+            items.append({
+                "id": str(ch.id),
+                "recipient": uname,
+                "global_name": label,
+                "recipient_id": rid,
+                "avatar": av,
+                "is_group": is_group,
+                "last_message_id": str(last_sf or ""),
+                "last_ms": last_ms,
+                "_sf_sort": int(last_sf or 0),
+                "preview": preview,
+            })
+        items.sort(key=lambda x: (x["last_ms"], x["_sf_sort"], int(x["id"])), reverse=True)
+        for it in items:
+            it.pop("_sf_sort", None)
+        return _json({"dms": items[:80]})
+
+    async def dm_messages_get(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        cid = int(request.match_info["id"])
+        limit = max(5, min(int(request.query.get("limit", "40")), 100))
+        before_raw = request.query.get("before", "").strip()
+        ch = bot.get_channel(cid)
+        if not ch:
+            try:
+                ch = await bot.fetch_channel(cid)
+            except Exception:
+                ch = None
+        if not ch:
+            return _json({"error": "DM channel not found"}, status=404)
+
+        kwargs: dict[str, Any] = {"limit": limit, "oldest_first": False}
+        if before_raw.isdigit():
+            kwargs["before"] = discord.Object(id=int(before_raw))
+
+        rows = []
+        async for m in ch.history(**kwargs):
+            rows.append(_serialize_dm_msg(m))
+        rows.reverse()
+
+        rec = getattr(ch, "recipient", None)
+        recipients_meta = []
+        if rec:
+            recipients_meta.append({"id": str(rec.id), "name": getattr(rec, "global_name", None) or rec.name, "username": str(rec)})
+        elif getattr(ch, "recipients", None):
+            for r_u in ch.recipients[:10]:
+                recipients_meta.append({"id": str(r_u.id), "name": getattr(r_u, "global_name", None) or r_u.name, "username": str(r_u)})
+
+        return _json({
+            "channel_id": str(cid),
+            "messages": rows,
+            "has_more": len(rows) == limit,
+            "recipients": recipients_meta,
+        })
+
+    async def dm_messages_post(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        cid = int(request.match_info["id"])
+        ch = bot.get_channel(cid)
+        if not ch:
+            try:
+                ch = await bot.fetch_channel(cid)
+            except Exception:
+                ch = None
+        if not ch:
+            return _json({"error": "DM channel not found"}, status=404)
+
+        content = ""
+        reply_to = ""
+        mention_author = True
+        files: list[discord.File] = []
+
+        if (request.content_type or "").startswith("multipart/"):
+            reader = await request.multipart()
+            while True:
+                part = await reader.next()
+                if part is None:
+                    break
+                if part.name == "content":
+                    content = (await part.text()).strip()[:2000]
+                elif part.name == "reply_to":
+                    reply_to = (await part.text()).strip()
+                elif part.name == "mention_author":
+                    mention_author = (await part.text()).strip().lower() not in ("0", "false", "no")
+                elif part.name == "file" and part.filename:
+                    buf = bytearray()
+                    while True:
+                        chunk = await part.read_chunk(65536)
+                        if not chunk:
+                            break
+                        buf.extend(chunk)
+                        if len(buf) > 25 * 1024 * 1024:
+                            return _json({"error": "Attachment exceeds 25 MB limit"}, status=413)
+                    if buf:
+                        files.append(discord.File(io.BytesIO(bytes(buf)), filename=part.filename))
+        else:
+            data = await _body(request)
+            content = str(data.get("content", "")).strip()[:2000]
+            reply_to = str(data.get("reply_to", "")).strip()
+            mention_author = bool(data.get("mention_author", True))
+
+        if not content and not files:
+            return _json({"error": "Message text or attachment required"}, status=400)
+
+        send_kwargs: dict[str, Any] = {}
+        if content:
+            send_kwargs["content"] = content
+        if files:
+            send_kwargs["files"] = files
+        if reply_to.isdigit():
+            send_kwargs["reference"] = ch.get_partial_message(int(reply_to))
+            send_kwargs["mention_author"] = mention_author
+
+        msg = await ch.send(**send_kwargs)
+        return _json({"ok": True, "message": _serialize_dm_msg(msg)})
 
     async def export_dm(request: web.Request) -> web.Response:
         auth.authenticate_request(request)
@@ -1251,7 +1430,49 @@ def register_routes(
         uid = bot.user.id if getattr(bot, "user", None) else 0
         hourly = tracker.get_hourly_activity(uid, hours=24) if uid else []
         stats = tracker.get_stats(uid, None) if uid else {}
-        return _json({"hourly": hourly, "stats": stats})
+        detailed = tracker.get_detailed_analytics(uid, bot=bot, days=14) if uid else {}
+        return _json({"hourly": hourly, "stats": stats, **detailed})
+
+    # ── Discord Orb Quest Completor ───────────────────────────────────────────
+
+    async def quests_get(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        qcog = bot.get_cog("Quests")
+        if not qcog:
+            return _json({"error": "Quests module missing"}, status=503)
+        sync = request.query.get("sync", "1") != "0"
+        if sync and not qcog._running:
+            snap = await qcog.sync_state()
+        else:
+            snap = qcog.snapshot()
+        return _json(snap)
+
+    async def quests_start(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        qcog = bot.get_cog("Quests")
+        if not qcog:
+            return _json({"error": "Quests module missing"}, status=503)
+        started = await qcog.start_runner(broadcast)
+        if not started:
+            return _json({"error": "Quest runner already running"}, status=409)
+        return _json({"ok": True, **qcog.snapshot()})
+
+    async def quests_stop(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        qcog = bot.get_cog("Quests")
+        if not qcog:
+            return _json({"error": "Quests module missing"}, status=503)
+        qcog.stop_runner()
+        return _json({"ok": True, **qcog.snapshot()})
+
+    async def quests_config(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        qcog = bot.get_cog("Quests")
+        if not qcog:
+            return _json({"error": "Quests module missing"}, status=503)
+        data = await _body(request)
+        cfg = qcog.update_config(data)
+        return _json({"ok": True, "config": cfg, **qcog.snapshot()})
 
     async def automation_handler(request: web.Request) -> web.Response:
         auth.authenticate_request(request)
@@ -1558,8 +1779,14 @@ def register_routes(
     r.add_post("/api/v1/voice", voice_control)
 
     r.add_get("/api/v1/dms", list_dms)
+    r.add_get("/api/v1/dms/{id}/messages", dm_messages_get)
+    r.add_post("/api/v1/dms/{id}/messages", dm_messages_post)
     r.add_get("/api/v1/dms/{id}/export", export_dm)
     r.add_post("/api/v1/dms/{id}/wipe", wipe_dm)
+    r.add_get("/api/v1/quests", quests_get)
+    r.add_post("/api/v1/quests/start", quests_start)
+    r.add_post("/api/v1/quests/stop", quests_stop)
+    r.add_post("/api/v1/quests/config", quests_config)
     r.add_get("/api/v1/bookmarks", bookmarks_handler)
     r.add_delete("/api/v1/bookmarks/{id}", bookmarks_handler)
     r.add_get("/api/v1/schedules", schedules_handler)

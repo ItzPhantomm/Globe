@@ -176,13 +176,21 @@
 
         <div class="sidebar-group">
           <div class="sidebar-label">Bot Modules</div>
+          <button type="button" class="sidebar-link" data-view="analytics">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+            <span>Insights &amp; Traffic</span>
+          </button>
+          <button type="button" class="sidebar-link" data-view="quests">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+            <span>Orb Quests</span>
+          </button>
           <button type="button" class="sidebar-link" data-view="servers">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
             <span>Servers &amp; Voice</span>
           </button>
           <button type="button" class="sidebar-link" data-view="dms">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            <span>DMs, Hooks &amp; Rules</span>
+            <span>DMs &amp; Live Chat</span>
           </button>
           <button type="button" class="sidebar-link" data-view="intel" data-focus="#osint-target">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -250,10 +258,13 @@
                 <h2 id="chart-heading">Activity &amp; Response</h2>
                 <p class="muted" id="chart-sub">Scrub across the canvas to inspect metrics</p>
               </div>
-              <div class="sliding-seg" id="chart-mode-seg">
-                <div class="seg-slider"></div>
-                <button type="button" class="active" data-chart-mode="activity">24h Messages</button>
-                <button type="button" data-chart-mode="ping">Response</button>
+              <div class="inline-actions">
+                <div class="sliding-seg" id="chart-mode-seg">
+                  <div class="seg-slider"></div>
+                  <button type="button" class="active" data-chart-mode="activity">24h Messages</button>
+                  <button type="button" data-chart-mode="ping">Response</button>
+                </div>
+                <button type="button" id="btn-ov-open-analytics" class="btn-ghost-sm">Insights →</button>
               </div>
             </div>
 
@@ -772,20 +783,310 @@
         </div>
       </section>
 
-      <!-- View: DMs & Automation Rules (Accessed via Menu Bar) -->
-      <section id="view-dms" class="view">
+      <!-- View: Insights & Traffic (Messages, Invites, Comparisons, Top Servers & Top Contacts) -->
+      <section id="view-analytics" class="view">
+        <div class="bento-metrics">
+          <div class="metric-tile m3-tile-a bento-surface stagger-item">
+            <div class="metric-top">
+              <span class="metric-label">Messages Today</span>
+              <span id="an-msg-delta" class="delta-pill mono">0% vs yest</span>
+            </div>
+            <div id="an-msg-today" class="metric-val mono">0</div>
+            <div id="an-msg-yest-sub" class="muted mono" style="margin-top:0.25rem;">Yesterday: 0</div>
+          </div>
+
+          <div class="metric-tile m3-tile-b bento-surface stagger-item">
+            <div class="metric-top">
+              <span class="metric-label">Global Messages</span>
+              <span class="m3-shape-tag clover" aria-hidden="true"></span>
+            </div>
+            <div id="an-msg-global" class="metric-val mono">0</div>
+            <div id="an-dm-sub" class="muted mono" style="margin-top:0.25rem;">DMs today: 0 · Global: 0</div>
+          </div>
+
+          <div class="metric-tile m3-tile-c bento-surface stagger-item">
+            <div class="metric-top">
+              <span class="metric-label">Invites Today</span>
+              <span id="an-inv-delta" class="delta-pill mono">0% vs yest</span>
+            </div>
+            <div id="an-inv-today" class="metric-val mono">0</div>
+            <div id="an-inv-yest-sub" class="muted mono" style="margin-top:0.25rem;">Yesterday: 0</div>
+          </div>
+
+          <div class="metric-tile m3-tile-d bento-surface stagger-item">
+            <div class="metric-top">
+              <span class="metric-label">Global Invites</span>
+              <span class="m3-shape-tag pill" aria-hidden="true"></span>
+            </div>
+            <div id="an-inv-global" class="metric-val mono">0</div>
+            <div class="muted mono" style="margin-top:0.25rem;">Created &amp; shared</div>
+          </div>
+        </div>
+
+        <div class="bento-card m3-hero-card bento-surface stagger-item">
+          <div class="block-head">
+            <div>
+              <h2>Traffic &amp; Yesterday Comparison</h2>
+              <p class="muted">Compare hourly throughput against yesterday or inspect 14-day message and invite trends</p>
+            </div>
+            <div class="sliding-seg" id="an-mode-seg">
+              <div class="seg-slider"></div>
+              <button type="button" class="active" data-an-mode="compare24">24h vs Yesterday</button>
+              <button type="button" data-an-mode="msgs14">14d Messages</button>
+              <button type="button" data-an-mode="inv14">14d Invites</button>
+            </div>
+          </div>
+
+          <div class="chart-legend-row">
+            <span class="legend-item"><span class="legend-dot gold"></span><span id="an-legend-primary">Today</span></span>
+            <span class="legend-item" id="an-legend-yest-wrap"><span class="legend-dot slate"></span><span>Yesterday</span></span>
+          </div>
+
+          <div class="chart-stage lg" id="an-chart-stage">
+            <div id="an-chart-tooltip" class="chart-tooltip hidden mono"></div>
+            <svg id="an-chart" viewBox="0 0 640 200" preserveAspectRatio="none" aria-label="Traffic comparison chart">
+              <defs>
+                <linearGradient id="an-area-grad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#d4a853" stop-opacity="0.34" />
+                  <stop offset="100%" stop-color="#d4a853" stop-opacity="0.0" />
+                </linearGradient>
+              </defs>
+              <g id="an-chart-grid" class="chart-grid"></g>
+              <g id="an-chart-bars"></g>
+              <path id="an-chart-yest" class="chart-line-yest" d="" />
+              <path id="an-chart-area" class="chart-area" d="" />
+              <path id="an-chart-line" class="chart-line" d="" />
+              <line id="an-chart-cross" class="chart-crosshair hidden" x1="0" y1="12" x2="0" y2="176" />
+              <circle id="an-chart-ring" class="chart-hover-ring hidden" cx="0" cy="0" r="8" />
+              <circle id="an-chart-dot" class="chart-hover-dot hidden" cx="0" cy="0" r="4" />
+            </svg>
+          </div>
+        </div>
+
         <div class="bento-split">
           <div class="bento-card bento-surface stagger-item">
             <div class="block-head">
               <div>
-                <h2>Send message</h2>
-                <p class="muted">Post as your account to any DM or server channel</p>
+                <h2>Most active servers</h2>
+                <p class="muted">Guilds ranked by all-time &amp; today volume</p>
+              </div>
+              <button type="button" id="btn-an-refresh" class="btn-ghost-sm">Refresh</button>
+            </div>
+            <div id="an-top-servers" class="rank-list"></div>
+          </div>
+
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>People talked with most</h2>
+                <p class="muted">Top DM contacts by combined message exchange</p>
+              </div>
+            </div>
+            <div id="an-top-contacts" class="rank-list"></div>
+          </div>
+        </div>
+
+        <div class="bento-card bento-surface stagger-item">
+          <div class="block-head">
+            <div>
+              <h2>Recent invite activity</h2>
+              <p class="muted">Shared invite links and newly created guild invites</p>
+            </div>
+          </div>
+          <div id="an-recent-invites" class="data-list"></div>
+        </div>
+      </section>
+
+      <!-- View: Discord Orb Quest Completor -->
+      <section id="view-quests" class="view">
+        <div class="bento-metrics">
+          <div class="metric-tile m3-tile-a bento-surface stagger-item">
+            <div class="metric-top">
+              <span class="metric-label">Live Orbs Balance</span>
+              <span class="orb-badge-dot" aria-hidden="true"></span>
+            </div>
+            <div id="q-orb-balance" class="metric-val mono gold-text">0 Orbs</div>
+          </div>
+          <div class="metric-tile m3-tile-b bento-surface stagger-item">
+            <div class="metric-top">
+              <span class="metric-label">Pending Eligible</span>
+              <span class="m3-shape-tag clover" aria-hidden="true"></span>
+            </div>
+            <div id="q-pending-count" class="metric-val mono">0</div>
+          </div>
+          <div class="metric-tile m3-tile-c bento-surface stagger-item">
+            <div class="metric-top">
+              <span class="metric-label">Session / Total Claimed</span>
+              <span class="m3-shape-tag burst" aria-hidden="true"></span>
+            </div>
+            <div id="q-earned-stat" class="metric-val mono">+0 / 0</div>
+          </div>
+          <div class="metric-tile m3-tile-d bento-surface stagger-item">
+            <div class="metric-top">
+              <span class="metric-label">Runner State</span>
+              <span class="m3-shape-tag pill" aria-hidden="true"></span>
+            </div>
+            <div id="q-runner-state" class="metric-val" style="font-size:1.15rem;">Standby</div>
+          </div>
+        </div>
+
+        <div class="bento-split asymmetric">
+          <div class="bento-card m3-hero-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Orb quest completor</h2>
+                <p id="q-status-line" class="muted">Gathers pending Orb quests and finishes them with humanized pacing</p>
+              </div>
+              <span id="q-status-chip" class="mono gold-chip">Standby</span>
+            </div>
+
+            <div class="inline-actions">
+              <button type="button" id="btn-quest-start" class="btn-expressive">Start Completor</button>
+              <button type="button" id="btn-quest-stop" class="btn-danger-tonal">Stop</button>
+              <button type="button" id="btn-quest-sync" class="btn-tonal">Sync Live Quests</button>
+            </div>
+
+            <div class="divider"></div>
+
+            <div id="quests-list" class="quests-feed"></div>
+          </div>
+
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Completor configuration</h2>
+                <p class="muted">Control reward filtering, enrollment, and anti-sus stealth timing</p>
+              </div>
+            </div>
+            <div class="stack-form">
+              <div class="switch-row">
+                <div class="switch-copy">
+                  <div class="switch-title">Orbs quests only</div>
+                  <div class="muted">Skip non-Orb quests (decorations/nitro trials)</div>
+                </div>
+                <button type="button" id="q-cfg-orbs" class="m3-switch" aria-pressed="true"><span class="m3-thumb"></span></button>
+              </div>
+
+              <div class="switch-row">
+                <div class="switch-copy">
+                  <div class="switch-title">Auto-enroll pending quests</div>
+                  <div class="muted">Automatically enroll unstarted Orb quests with human delay</div>
+                </div>
+                <button type="button" id="q-cfg-enroll" class="m3-switch" aria-pressed="true"><span class="m3-thumb"></span></button>
+              </div>
+
+              <div class="field">
+                <label>Pacing profile</label>
+                <div class="sliding-seg" id="q-pace-seg">
+                  <div class="seg-slider"></div>
+                  <button type="button" class="active" data-pace="stealth">Stealth (Jittered)</button>
+                  <button type="button" data-pace="standard">Standard</button>
+                </div>
+              </div>
+
+              <div class="field">
+                <label>Enabled task runners</label>
+                <div class="chip-check-grid" id="q-task-chips">
+                  <label class="chip-check"><input type="checkbox" value="WATCH_VIDEO" checked /><span>Watch Video</span></label>
+                  <label class="chip-check"><input type="checkbox" value="WATCH_VIDEO_ON_MOBILE" checked /><span>Mobile Video</span></label>
+                  <label class="chip-check"><input type="checkbox" value="PLAY_ON_DESKTOP" checked /><span>Play Desktop</span></label>
+                  <label class="chip-check"><input type="checkbox" value="PLAY_ACTIVITY" checked /><span>Activity</span></label>
+                  <label class="chip-check"><input type="checkbox" value="STREAM_ON_DESKTOP" checked /><span>Stream</span></label>
+                </div>
+              </div>
+
+              <button type="button" id="btn-quest-cfg-save" class="btn-tonal">Save Configuration</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- View: DMs, Side-by-Side Live Web Chat & Automation Rules -->
+      <section id="view-dms" class="view">
+        <div class="bento-card m3-hero-card bento-surface dm-studio-card stagger-item">
+          <div class="block-head">
+            <div>
+              <h2>Direct messages</h2>
+              <p class="muted">Sorted from most recent activity — click any conversation to chat live</p>
+            </div>
+            <button type="button" id="btn-dm-refresh" class="btn-ghost-sm">Refresh</button>
+          </div>
+
+          <div class="dm-studio-layout">
+            <!-- Left Pane: Recent DM Conversations -->
+            <aside class="dm-list-pane">
+              <input id="dm-search-input" type="search" placeholder="Search conversations..." />
+              <div id="dms-list" class="dm-conv-list"></div>
+            </aside>
+
+            <!-- Right Pane: Live Chat Thread & Composer -->
+            <div class="dm-chat-pane">
+              <div class="dm-chat-head" id="dm-chat-head">
+                <div class="dm-chat-peer">
+                  <img id="dm-peer-avatar" class="avatar hidden" src="" alt="" />
+                  <div style="min-width:0;">
+                    <div id="dm-peer-name" class="data-title">Select a DM conversation</div>
+                    <div id="dm-peer-sub" class="muted mono">Pick someone from the left list</div>
+                  </div>
+                </div>
+                <div id="dm-peer-actions" class="inline-actions hidden">
+                  <button type="button" id="btn-dm-mention" class="btn-ghost-sm">@Mention</button>
+                  <a id="btn-dm-export" class="m3-pill-btn" href="#" style="text-decoration:none;">Export</a>
+                  <button type="button" id="btn-dm-wipe" class="btn-danger-tonal sm">Wipe</button>
+                </div>
+              </div>
+
+              <div id="dm-chat-scroll" class="dm-chat-scroll">
+                <div id="dm-load-more-wrap" class="dm-load-more hidden">
+                  <button type="button" id="btn-dm-load-more" class="btn-ghost-sm">Load older messages</button>
+                </div>
+                <div id="dm-chat-messages" class="dm-chat-messages">
+                  <div class="muted" style="padding:1.5rem 0;text-align:center;">Click a conversation on the left to open the live thread, scroll history, attach files, reply, and mention.</div>
+                </div>
+              </div>
+
+              <div id="dm-reply-bar" class="dm-reply-bar hidden">
+                <div class="dm-reply-info">
+                  <span class="gold-chip mono" style="padding:0.14rem 0.5rem;font-size:0.7rem;">Replying</span>
+                  <span id="dm-reply-preview" class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></span>
+                </div>
+                <div class="inline-actions">
+                  <label class="check-row" style="font-size:0.75rem;">
+                    <input type="checkbox" id="dm-reply-ping" checked />
+                    <span>Ping</span>
+                  </label>
+                  <button type="button" id="btn-dm-reply-cancel" class="btn-ghost-sm">×</button>
+                </div>
+              </div>
+
+              <div id="dm-attach-bar" class="dm-attach-bar hidden"></div>
+
+              <div class="dm-composer">
+                <input id="dm-file-input" type="file" multiple class="hidden" />
+                <button type="button" id="btn-dm-attach" class="btn-tonal sm" title="Attach file">+ File</button>
+                <textarea id="dm-compose-input" rows="1" placeholder="Type a message... (Enter sends, Shift+Enter newline)" maxlength="2000"></textarea>
+                <button type="button" id="btn-dm-send" class="btn-expressive sm">Send</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bento-split">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Quick channel dispatch &amp; friends</h2>
+                <p class="muted">Post by raw channel ID or manage friend requests</p>
+              </div>
+              <div class="inline-actions">
+                <button id="btn-accept-friends" class="btn-tonal sm">Accept requests</button>
+                <button id="btn-clear-outgoing" class="btn-ghost-sm">Clear sent</button>
               </div>
             </div>
             <div class="stack-form">
               <div class="field">
                 <label for="dispatch-channel">Channel or DM ID</label>
-                <input id="dispatch-channel" type="text" placeholder="Channel ID (click Use on any DM below)" class="mono" />
+                <input id="dispatch-channel" type="text" placeholder="Channel ID" class="mono" />
               </div>
               <div class="inline-form">
                 <input id="dispatch-content" type="text" placeholder="Type message..." maxlength="2000" />
@@ -820,52 +1121,41 @@
           </div>
         </div>
 
-        <div class="bento-card bento-surface stagger-item">
-          <div class="block-head">
-            <div>
-              <h2>Channel auto-reply &amp; auto-react</h2>
-              <p class="muted">Trigger automated replies or reactions per channel</p>
-            </div>
-          </div>
-          <div class="spoofer-grid two-col">
-            <div class="field">
-              <label for="ar-ch-id">Channel ID</label>
-              <input id="ar-ch-id" type="text" placeholder="Channel ID" class="mono" />
-            </div>
-            <div class="field">
-              <label for="ar-emojis">Auto-react emojis (space separated)</label>
-              <div class="inline-form">
-                <input id="ar-emojis" type="text" placeholder="🔥 ✅" />
-                <button id="btn-ar-react" class="btn-tonal">Save</button>
-              </div>
-            </div>
-          </div>
-          <div class="spoofer-grid">
-            <div class="field">
-              <label for="ar-trigger">Trigger word or /regex/</label>
-              <input id="ar-trigger" type="text" placeholder="hello or /ping/i" />
-            </div>
-            <div class="field">
-              <label for="ar-response">Auto-reply text</label>
-              <input id="ar-response" type="text" placeholder="Reply message..." />
-            </div>
-            <div class="spoofer-actions">
-              <button id="btn-ar-add" class="btn-expressive">Add rule</button>
-            </div>
-          </div>
-          <div id="ar-rules-list" class="data-list"></div>
-        </div>
-
         <div class="bento-split">
           <div class="bento-card bento-surface stagger-item">
             <div class="block-head">
-              <h2>Direct messages</h2>
-              <div class="inline-actions">
-                <button id="btn-accept-friends" class="btn-tonal">Accept requests</button>
-                <button id="btn-clear-outgoing" class="btn-ghost-sm">Clear sent</button>
+              <div>
+                <h2>Channel auto-reply &amp; auto-react</h2>
+                <p class="muted">Trigger automated replies or reactions per channel</p>
               </div>
             </div>
-            <div id="dms-list" class="data-list"></div>
+            <div class="spoofer-grid two-col">
+              <div class="field">
+                <label for="ar-ch-id">Channel ID</label>
+                <input id="ar-ch-id" type="text" placeholder="Channel ID" class="mono" />
+              </div>
+              <div class="field">
+                <label for="ar-emojis">Auto-react emojis (space separated)</label>
+                <div class="inline-form">
+                  <input id="ar-emojis" type="text" placeholder="🔥 ✅" />
+                  <button id="btn-ar-react" class="btn-tonal">Save</button>
+                </div>
+              </div>
+            </div>
+            <div class="spoofer-grid">
+              <div class="field">
+                <label for="ar-trigger">Trigger word or /regex/</label>
+                <input id="ar-trigger" type="text" placeholder="hello or /ping/i" />
+              </div>
+              <div class="field">
+                <label for="ar-response">Auto-reply text</label>
+                <input id="ar-response" type="text" placeholder="Reply message..." />
+              </div>
+              <div class="spoofer-actions">
+                <button id="btn-ar-add" class="btn-expressive">Add rule</button>
+              </div>
+            </div>
+            <div id="ar-rules-list" class="data-list"></div>
           </div>
 
           <div class="bento-card bento-surface stagger-item">
@@ -995,6 +1285,7 @@
                   <option value="voice">voice</option>
                   <option value="troll">troll</option>
                   <option value="fun">fun</option>
+                  <option value="quests">quests</option>
                 </select>
                 <button id="btn-sys-reload" class="btn-tonal">Reload cog</button>
               </div>

@@ -135,6 +135,7 @@ class DashboardServer:
 
     async def start(self) -> None:
         register_log_listener(self._log_cb)
+        self.bot._dashboard_broadcast = self.broadcast
         self._runner = web.AppRunner(self.app, access_log=None)
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, self.host, self.port)

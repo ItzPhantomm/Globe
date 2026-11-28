@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent.parent / "data" / "stats.db"
@@ -91,6 +91,22 @@ class MessageTracker:
                     timestamp REAL
                 )
                 """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS invite_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    guild_id INTEGER,
+                    code TEXT,
+                    kind TEXT,
+                    date TEXT,
+                    timestamp REAL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_invite_logs_user_date ON invite_logs(user_id, date)"
             )
 
     def flush(self) -> None:
@@ -210,6 +226,256 @@ class MessageTracker:
             lbl = datetime.fromtimestamp(slot_ts).strftime("%H:00")
             out.append({"label": lbl, "count": buckets[i]})
         return out
+
+    def record_invite(self, user_id: int, guild_id: int | None, code: str, kind: str = "shared") -> None:
+        """Persist a shared or created Discord invite event for analytics."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        now = time.time()
+        try:
+            conn = self._get_connection()
+            conn.execute(
+                "INSERT INTO invite_logs (user_id, guild_id, code, kind, date, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, guild_id if guild_id else 0, code[:32], kind[:16], today, now),
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+    def get_dm_last_activity(self) -> dict[int, float]:
+        """Return {channel_id: latest_timestamp} for DM activity sorting."""
+        self.flush()
+        out: dict[int, float] = {}
+        try:
+            conn = self._get_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT channel_id, MAX(timestamp) FROM messages WHERE guild_id = 0 GROUP BY channel_id")
+            for cid, ts in cur.fetchall():
+                if cid:
+                    out[int(cid)] = float(ts or 0.0)
+        except Exception:
+            pass
+        return out
+
+    @staticmethod
+    def _delta_pct(today_val: int, yesterday_val: int) -> float:
+        if yesterday_val <= 0:
+            return 100.0 if today_val > 0 else 0.0
+        return round(((today_val - yesterday_val) / yesterday_val) * 100.0, 1)
+
+    def get_detailed_analytics(self, author_id: int, bot: object | None = None, days: int = 14) -> dict:
+        """Compute daily/yesterday/global comparisons, multi-day series, top servers, and top DM contacts."""
+        self.flush()
+        now_dt = datetime.now(timezone.utc)
+        today_str = now_dt.strftime("%Y-%m-%d")
+        yest_dt = now_dt - timedelta(days=1)
+        yest_str = yest_dt.strftime("%Y-%m-%d")
+        today_start = now_dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        yest_start = (now_dt.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)).timestamp()
+
+        conn = self._get_connection()
+        cur = conn.cursor()
+
+        # Global & today/yesterday messages
+        cur.execute("SELECT COUNT(*) FROM messages WHERE author_id = ?", (author_id,))
+        msgs_global = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM messages WHERE author_id = ? AND date = ?", (author_id, today_str))
+        msgs_today = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM messages WHERE author_id = ? AND date = ?", (author_id, yest_str))
+        msgs_yesterday = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM messages WHERE author_id = ? AND guild_id = 0", (author_id,))
+        dms_global = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM messages WHERE author_id = ? AND guild_id = 0 AND date = ?", (author_id, today_str))
+        dms_today = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM messages WHERE author_id = ? AND guild_id = 0 AND date = ?", (author_id, yest_str))
+        dms_yesterday = cur.fetchone()[0]
+
+        # Invites counts
+        cur.execute("SELECT COUNT(*) FROM invite_logs WHERE user_id = ?", (author_id,))
+        inv_global = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM invite_logs WHERE user_id = ? AND date = ?", (author_id, today_str))
+        inv_today = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM invite_logs WHERE user_id = ? AND date = ?", (author_id, yest_str))
+        inv_yesterday = cur.fetchone()[0]
+
+        # 24h hourly comparison (today vs yesterday by hour-of-day UTC)
+        t_hours = [0] * 24
+        y_hours = [0] * 24
+        it_hours = [0] * 24
+        iy_hours = [0] * 24
+        cur.execute("SELECT timestamp FROM messages WHERE author_id = ? AND timestamp >= ?", (author_id, yest_start))
+        for (ts,) in cur.fetchall():
+            if ts >= today_start:
+                idx = min(23, max(0, int((ts - today_start) // 3600)))
+                t_hours[idx] += 1
+            else:
+                idx = min(23, max(0, int((ts - yest_start) // 3600)))
+                y_hours[idx] += 1
+
+        cur.execute("SELECT timestamp FROM invite_logs WHERE user_id = ? AND timestamp >= ?", (author_id, yest_start))
+        for (ts,) in cur.fetchall():
+            if ts >= today_start:
+                idx = min(23, max(0, int((ts - today_start) // 3600)))
+                it_hours[idx] += 1
+            else:
+                idx = min(23, max(0, int((ts - yest_start) // 3600)))
+                iy_hours[idx] += 1
+
+        hourly_comparison = [
+            {
+                "label": f"{h:02d}:00",
+                "today": t_hours[h],
+                "yesterday": y_hours[h],
+                "invites_today": it_hours[h],
+                "invites_yesterday": iy_hours[h],
+            }
+            for h in range(24)
+        ]
+
+        # 14-day daily series
+        day_keys = [(now_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days - 1, -1, -1)]
+        msg_by_day: dict[str, int] = {d: 0 for d in day_keys}
+        dm_by_day: dict[str, int] = {d: 0 for d in day_keys}
+        inv_by_day: dict[str, int] = {d: 0 for d in day_keys}
+
+        cutoff_date = day_keys[0]
+        cur.execute(
+            "SELECT date, guild_id, COUNT(*) FROM messages WHERE author_id = ? AND date >= ? GROUP BY date, guild_id",
+            (author_id, cutoff_date),
+        )
+        for d_str, gid, cnt in cur.fetchall():
+            if d_str in msg_by_day:
+                msg_by_day[d_str] += cnt
+                if gid == 0:
+                    dm_by_day[d_str] += cnt
+
+        cur.execute(
+            "SELECT date, COUNT(*) FROM invite_logs WHERE user_id = ? AND date >= ? GROUP BY date",
+            (author_id, cutoff_date),
+        )
+        for d_str, cnt in cur.fetchall():
+            if d_str in inv_by_day:
+                inv_by_day[d_str] += cnt
+
+        daily_series = [
+            {
+                "date": d,
+                "label": d[5:],
+                "messages": msg_by_day[d],
+                "dms": dm_by_day[d],
+                "invites": inv_by_day[d],
+            }
+            for d in day_keys
+        ]
+
+        # Most active servers (top 8)
+        cur.execute(
+            """
+            SELECT guild_id,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN date = ? THEN 1 ELSE 0 END) AS today_cnt
+            FROM messages
+            WHERE author_id = ? AND guild_id != 0
+            GROUP BY guild_id
+            ORDER BY total DESC
+            LIMIT 8
+            """,
+            (today_str, author_id),
+        )
+        server_rows = cur.fetchall()
+        server_msg_sum = sum(r[1] for r in server_rows) or 1
+        top_servers = []
+        for gid, total, today_cnt in server_rows:
+            g = bot.get_guild(gid) if bot and hasattr(bot, "get_guild") else None
+            top_servers.append({
+                "guild_id": str(gid),
+                "name": g.name if g else f"Server {gid}",
+                "icon": str(g.icon.url) if g and getattr(g, "icon", None) else "",
+                "count": total,
+                "today_count": int(today_cnt or 0),
+                "share_pct": round((total / server_msg_sum) * 100.0, 1),
+            })
+
+        # People talked with most (DM channels sorted by combined sent + received messages)
+        cur.execute(
+            """
+            SELECT channel_id,
+                   SUM(CASE WHEN author_id = ? THEN 1 ELSE 0 END) AS sent,
+                   SUM(CASE WHEN author_id != ? THEN 1 ELSE 0 END) AS received,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN date = ? THEN 1 ELSE 0 END) AS today_cnt,
+                   MAX(timestamp) AS last_ts
+            FROM messages
+            WHERE guild_id = 0
+            GROUP BY channel_id
+            ORDER BY total DESC
+            LIMIT 10
+            """,
+            (author_id, author_id, today_str),
+        )
+        top_contacts = []
+        for cid, sent, received, total, today_cnt, last_ts in cur.fetchall():
+            ch = bot.get_channel(cid) if bot and hasattr(bot, "get_channel") else None
+            rec = getattr(ch, "recipient", None) if ch else None
+            cname = (
+                getattr(rec, "global_name", None)
+                or getattr(rec, "name", None)
+                or (str(rec) if rec else None)
+                or getattr(ch, "name", None)
+                or f"DM {cid}"
+            )
+            uname = str(rec) if rec else f"channel:{cid}"
+            av = str(rec.display_avatar.url) if rec and getattr(rec, "display_avatar", None) else ""
+            top_contacts.append({
+                "channel_id": str(cid),
+                "user_id": str(rec.id) if rec else "",
+                "name": cname,
+                "username": uname,
+                "avatar": av,
+                "sent": int(sent or 0),
+                "received": int(received or 0),
+                "total": int(total or 0),
+                "today_count": int(today_cnt or 0),
+                "last_ts": float(last_ts or 0.0),
+            })
+
+        # Recent invite events
+        cur.execute(
+            "SELECT code, guild_id, kind, timestamp FROM invite_logs WHERE user_id = ? ORDER BY id DESC LIMIT 12",
+            (author_id,),
+        )
+        recent_invites = []
+        for code, gid, kind, ts in cur.fetchall():
+            g = bot.get_guild(gid) if gid and bot and hasattr(bot, "get_guild") else None
+            recent_invites.append({
+                "code": code,
+                "guild_id": str(gid),
+                "guild_name": g.name if g else ("Direct Message" if not gid else f"Guild {gid}"),
+                "kind": kind,
+                "timestamp": ts,
+            })
+
+        return {
+            "comparison": {
+                "messages_today": msgs_today,
+                "messages_yesterday": msgs_yesterday,
+                "messages_delta_pct": self._delta_pct(msgs_today, msgs_yesterday),
+                "messages_global": msgs_global,
+                "dms_today": dms_today,
+                "dms_yesterday": dms_yesterday,
+                "dms_delta_pct": self._delta_pct(dms_today, dms_yesterday),
+                "dms_global": dms_global,
+                "invites_today": inv_today,
+                "invites_yesterday": inv_yesterday,
+                "invites_delta_pct": self._delta_pct(inv_today, inv_yesterday),
+                "invites_global": inv_global,
+            },
+            "hourly_comparison": hourly_comparison,
+            "daily_series": daily_series,
+            "top_servers": top_servers,
+            "top_contacts": top_contacts,
+            "recent_invites": recent_invites,
+        }
 
     def record_snipe(
         self,
