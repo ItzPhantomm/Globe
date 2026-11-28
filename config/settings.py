@@ -57,6 +57,9 @@ class Settings:
     dashboard_host: str = field(default_factory=lambda: _env_str("DASHBOARD_HOST", "127.0.0.1"))
     dashboard_port: int = field(default_factory=lambda: _env_int("DASHBOARD_PORT", 8787))
 
+    # ── Captcha Solver (OpenRouter vision model) ───────────
+    openrouter_api_key: str = field(default_factory=lambda: _env_str("OPENROUTER_API_KEY", ""))
+
 
 # Singleton — import this everywhere
 settings = Settings()

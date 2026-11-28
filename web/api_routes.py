@@ -2049,8 +2049,10 @@ def register_routes(
     async def token_from_creds(request: web.Request) -> web.Response:
         """Pre-auth endpoint — extracts a Discord user token from email/password credentials.
         No session auth required (called before Globe login).
+        Automatically solves hCaptcha challenges via OpenRouter vision model when triggered.
         """
-        import base64, json as _json_mod
+        import base64, json as _json_mod, re as _re, uuid as _uuid
+
         data = await _body(request)
         login_id = str(data.get("login", "")).strip()
         password = str(data.get("password", "")).strip()
@@ -2061,7 +2063,7 @@ def register_routes(
             if not (totp_code and ticket):
                 return _json({"error": "login and password required"}, status=400)
 
-        # Mobile Android client fingerprint — matches ext_token.py
+        # Mobile Android client fingerprint
         mobile_super_props = {
             "os": "Android", "browser": "Discord Android", "device": "Pixel 7 Pro",
             "system_locale": "en-US", "client_version": "225.17 - rn",
@@ -2071,7 +2073,7 @@ def register_routes(
             "client_build_number": 225017, "client_event_source": None,
         }
         encoded_props = base64.b64encode(_json_mod.dumps(mobile_super_props).encode()).decode()
-        headers = {
+        discord_headers = {
             "Content-Type": "application/json",
             "User-Agent": "Discord-Android/225017; Mozilla/5.0 (Linux; Android 14; Pixel 7 Pro Build/UQ1A.240205.004; wv)",
             "X-Super-Properties": encoded_props,
@@ -2079,20 +2081,159 @@ def register_routes(
             "Accept-Language": "en-US",
         }
 
-        try:
-            tools = bot.get_cog("Tools")
-            # Reuse the bot's httpx client factory when available, else make a fresh one
-            http = tools._get_http_client() if tools else None
-        except Exception:
-            http = None
-
         import httpx as _httpx
 
+        # ── hCaptcha solver via OpenRouter vision model ──────────────────────────
+        OPENROUTER_KEY = settings.openrouter_api_key
+        CAPTCHA_MODEL  = "meta-llama/llama-3.2-11b-vision-instruct:free"
+        HCAPTCHA_HOST  = "discord.com"
+        HCAPTCHA_SITEKEY_DEFAULT = "4c672d35-0701-42b2-88c3-78380b0db560"  # Discord login sitekey
+
+        async def _solve_hcaptcha(sitekey: str, rqdata: str = "") -> str | None:
+            """Solve hCaptcha using OpenRouter vision model. Returns response token or None."""
+            if not OPENROUTER_KEY:
+                return None
+            try:
+                async with _httpx.AsyncClient(timeout=30.0) as hc:
+                    # Step 1: get challenge from hCaptcha
+                    version = "2.3.9"
+                    widget_id = _uuid.uuid4().hex[:8]
+                    params: dict[str, Any] = {
+                        "v": version,
+                        "host": HCAPTCHA_HOST,
+                        "sitekey": sitekey,
+                        "sc": "1",
+                        "swa": "1",
+                        "spst": "1",
+                        "hl": "en",
+                    }
+                    if rqdata:
+                        params["rqdata"] = rqdata
+
+                    challenge_resp = await hc.post(
+                        f"https://hcaptcha.com/getcaptcha/{sitekey}",
+                        data=params,
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 7 Pro) AppleWebKit/537.36",
+                            "Origin": "https://newassets.hcaptcha.com",
+                            "Referer": "https://newassets.hcaptcha.com/",
+                        },
+                    )
+                    if challenge_resp.status_code != 200:
+                        log_info(f"[captcha] getcaptcha HTTP {challenge_resp.status_code}")
+                        return None
+
+                    chal = challenge_resp.json()
+                    challenge_key = chal.get("key", "")
+                    tasklist = chal.get("tasklist", [])
+                    request_type = chal.get("request_type", "image_label_binary")
+
+                    if not challenge_key or not tasklist:
+                        # Already passed (no challenge)
+                        generated_pass_uuid = chal.get("generated_pass_UUID", "")
+                        if generated_pass_uuid:
+                            return f"P1_{generated_pass_uuid}"
+                        log_info("[captcha] empty tasklist")
+                        return None
+
+                    # Extract task question for the AI
+                    requester_question = chal.get("requester_question", {})
+                    question_text = (
+                        requester_question.get("en", "")
+                        or chal.get("request_config", {}).get("label", "")
+                        or "Select all images that match the category shown"
+                    )
+
+                    # Step 2: solve each task image with OpenRouter vision model
+                    answers: dict[str, str] = {}
+                    for task in tasklist:
+                        task_key = task.get("task_key", "")
+                        img_url  = task.get("datapoint_uri", "")
+                        if not task_key or not img_url:
+                            continue
+
+                        prompt_text = (
+                            f"You are solving an hCaptcha image challenge. "
+                            f"Question: {question_text}. "
+                            f"Does this image match the description? "
+                            f"Reply with ONLY 'true' if yes, or 'false' if no."
+                        )
+                        or_payload = {
+                            "model": CAPTCHA_MODEL,
+                            "max_tokens": 5,
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "image_url", "image_url": {"url": img_url}},
+                                        {"type": "text", "text": prompt_text},
+                                    ],
+                                }
+                            ],
+                        }
+                        or_resp = await hc.post(
+                            "https://openrouter.ai/api/v1/chat/completions",
+                            json=or_payload,
+                            headers={
+                                "Authorization": f"Bearer {OPENROUTER_KEY}",
+                                "Content-Type": "application/json",
+                                "HTTP-Referer": "https://globe.local",
+                                "X-Title": "Globe Selfbot",
+                            },
+                        )
+                        if or_resp.status_code == 200:
+                            choice = or_resp.json().get("choices", [{}])[0]
+                            answer_text = choice.get("message", {}).get("content", "false").strip().lower()
+                            answers[task_key] = "true" if answer_text.startswith("t") else "false"
+                        else:
+                            answers[task_key] = "true"  # optimistic fallback
+
+                    # Step 3: submit answers
+                    submit_payload = {
+                        "v": version,
+                        "job_mode": request_type,
+                        "answers": answers,
+                        "serverdomain": HCAPTCHA_HOST,
+                        "sitekey": sitekey,
+                        "motionData": _json_mod.dumps({
+                            "st": 1000, "dct": 1000, "mm": [[100, 200, 1000]],
+                        }),
+                        "n": "undefined",
+                        "c": _json_mod.dumps({"type": "hsw", "req": ""}),
+                    }
+                    if rqdata:
+                        submit_payload["rqdata"] = rqdata
+
+                    check_resp = await hc.post(
+                        f"https://hcaptcha.com/checkcaptcha/{sitekey}/{challenge_key}",
+                        json=submit_payload,
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 7 Pro) AppleWebKit/537.36",
+                            "Content-Type": "application/json",
+                            "Origin": "https://newassets.hcaptcha.com",
+                            "Referer": "https://newassets.hcaptcha.com/",
+                        },
+                    )
+                    if check_resp.status_code == 200:
+                        check_data = check_resp.json()
+                        if check_data.get("pass"):
+                            return check_data.get("generated_pass_UUID", "")
+                    log_info(f"[captcha] checkcaptcha HTTP {check_resp.status_code}: {check_resp.text[:200]}")
+                    return None
+            except Exception as exc:
+                log_info(f"[captcha] solver exception: {exc}")
+                return None
+
+        async def _discord_login(payload: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict]:
+            async with _httpx.AsyncClient(headers=headers, timeout=12.0) as client:
+                resp = await client.post("https://discord.com/api/v9/auth/login", json=payload)
+                return resp.status_code, resp.json()
+
         try:
-            # Phase 2: MFA code submission with existing ticket
+            # Phase 2: MFA code submission
             if totp_code and ticket:
                 clean_code = totp_code.replace(" ", "").replace("-", "")
-                async with _httpx.AsyncClient(headers=headers, timeout=12.0) as client:
+                async with _httpx.AsyncClient(headers=discord_headers, timeout=12.0) as client:
                     mfa_resp = await client.post(
                         "https://discord.com/api/v9/auth/mfa/totp",
                         json={"code": clean_code, "ticket": ticket, "login_source": None},
@@ -2100,8 +2241,7 @@ def register_routes(
                     mfa_data = mfa_resp.json()
                 if mfa_resp.status_code == 200 and "token" in mfa_data:
                     return _json({"ok": True, "token": mfa_data["token"]})
-                # Try SMS fallback
-                async with _httpx.AsyncClient(headers=headers, timeout=12.0) as client:
+                async with _httpx.AsyncClient(headers=discord_headers, timeout=12.0) as client:
                     sms_resp = await client.post(
                         "https://discord.com/api/v9/auth/mfa/sms",
                         json={"code": clean_code, "ticket": ticket, "login_source": None},
@@ -2112,38 +2252,75 @@ def register_routes(
                 err = mfa_data.get("message", "Invalid 2FA code.")
                 return _json({"error": f"2FA failed: {err}"}, status=401)
 
-            # Phase 1: Initial login
-            payload = {
+            # Phase 1: Initial login (with automatic captcha retry)
+            base_payload: dict[str, Any] = {
                 "login": login_id, "password": password,
                 "undelete": False, "login_source": None, "gift_code_sku_id": None,
             }
-            async with _httpx.AsyncClient(headers=headers, timeout=12.0) as client:
-                resp = await client.post("https://discord.com/api/v9/auth/login", json=payload)
-                resp_data = resp.json()
 
-            # Direct token
-            if resp.status_code == 200 and "token" in resp_data:
+            status, resp_data = await _discord_login(base_payload, discord_headers)
+
+            # Direct token — no captcha
+            if status == 200 and "token" in resp_data:
                 return _json({"ok": True, "token": resp_data["token"]})
 
-            # MFA required
-            if resp.status_code == 200 and resp_data.get("mfa") is True:
-                mfa_ticket = resp_data.get("ticket", "")
+            # MFA required — no captcha
+            if status == 200 and resp_data.get("mfa") is True:
                 return _json({
-                    "ok": True, "mfa": True, "ticket": mfa_ticket,
+                    "ok": True, "mfa": True,
+                    "ticket": resp_data.get("ticket", ""),
                     "totp": resp_data.get("totp", False),
                     "sms": resp_data.get("sms", False),
                 })
 
-            # Error cases
+            # Captcha required — solve and retry
+            if resp_data.get("captcha_key") or resp_data.get("captcha_sitekey"):
+                sitekey  = resp_data.get("captcha_sitekey") or HCAPTCHA_SITEKEY_DEFAULT
+                rqdata   = resp_data.get("captcha_rqdata", "")
+                rqtoken  = resp_data.get("captcha_rqtoken", "")
+
+                log_info(f"[captcha] Discord triggered hCaptcha sitekey={sitekey}")
+
+                if not OPENROUTER_KEY:
+                    return _json({
+                        "error": "Discord requires captcha verification and no OPENROUTER_API_KEY is configured. "
+                                 "Log into Discord mobile once to clear the captcha, then retry."
+                    }, status=401)
+
+                captcha_token = await _solve_hcaptcha(sitekey, rqdata)
+
+                if not captcha_token:
+                    return _json({
+                        "error": "Captcha challenge appeared but solver could not complete it. "
+                                 "Log into Discord mobile once to clear captcha, then retry."
+                    }, status=401)
+
+                # Retry with captcha token
+                retry_payload: dict[str, Any] = {**base_payload, "captcha_key": captcha_token}
+                if rqtoken:
+                    retry_payload["captcha_rqtoken"] = rqtoken
+
+                status, resp_data = await _discord_login(retry_payload, discord_headers)
+
+                if status == 200 and "token" in resp_data:
+                    return _json({"ok": True, "token": resp_data["token"]})
+                if status == 200 and resp_data.get("mfa") is True:
+                    return _json({
+                        "ok": True, "mfa": True,
+                        "ticket": resp_data.get("ticket", ""),
+                        "totp": resp_data.get("totp", False),
+                        "sms": resp_data.get("sms", False),
+                    })
+                return _json({"error": f"Captcha solved but login still failed: {resp_data.get('message', 'unknown')}"}, status=401)
+
+            # Other errors
             message = resp_data.get("message", "Authentication failed.")
-            errors = resp_data.get("errors", {})
+            errors  = resp_data.get("errors", {})
             if "login" in errors:
                 message = "Account does not exist or invalid email/phone."
             elif "password" in errors:
                 message = "Incorrect password."
-            elif resp_data.get("captcha_key"):
-                message = "Discord requires captcha verification. Log in via Discord mobile app once to clear it."
-            return _json({"error": f"{message} (HTTP {resp.status_code})"}, status=401)
+            return _json({"error": f"{message} (HTTP {status})"}, status=401)
 
         except Exception as exc:
             return _json({"error": f"Network error: {exc}"}, status=503)
