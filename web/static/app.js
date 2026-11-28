@@ -80,7 +80,7 @@ function initLiquidGlassDock() {
   requestAnimationFrame(rebuild);
 }
 
-// ── 2. Sliding Active Pill Indicators (Dock + Segmented Controls) ──
+// ── 2. Animated Sliding Pill Indicators ───────────────────
 function moveSlider(container, slider, activeBtn) {
   if (!container || !slider || !activeBtn) return;
   const left = activeBtn.offsetLeft;
@@ -501,13 +501,7 @@ function connectWS() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   WS = new WebSocket(`${proto}//${location.host}/ws`);
 
-  WS.onopen = () => {
-    $("#ws-dot").classList.add("online");
-    $("#ws-label").textContent = "Live";
-  };
   WS.onclose = () => {
-    $("#ws-dot").classList.remove("online");
-    $("#ws-label").textContent = "Reconnecting";
     setTimeout(() => {
       if (!$("#workspace").classList.contains("hidden")) connectWS();
     }, 3000);
@@ -544,29 +538,23 @@ function updateTelemetry(t) {
   $("#m-latency").textContent = `${t.latency_ms} ms`;
   $("#m-uptime").textContent = fmtUptime(t.uptime_s);
   $("#m-reach").textContent = `${t.guilds} / ${t.friends}`;
-  $("#spark-latest").textContent = `${t.latency_ms} ms`;
-  $("#pill-extra").textContent = `· ${t.latency_ms}ms`;
   latHistory.push(Number(t.latency_ms) || 0);
   if (latHistory.length > 30) latHistory.shift();
   if (chartMode === "ping") drawMainChart();
 }
 
 function handleJobProgress(d) {
-  const pill = $("#dynamic-pill");
   if (d.job === "spoofer") {
     const wrap = $("#spoofer-bar-wrap");
     if (d.done) {
       $("#spoofer-status").textContent = "Done";
       $("#spoofer-bar").style.width = "100%";
-      pill?.classList.remove("active-job");
       setTimeout(() => wrap.classList.add("hidden"), 1500);
     } else {
       wrap.classList.remove("hidden");
-      pill?.classList.add("active-job");
       const pct = Math.round((d.current / Math.max(1, d.total)) * 100);
       $("#spoofer-bar").style.width = `${pct}%`;
       $("#spoofer-status").textContent = `[${d.current}/${d.total}] ${d.game}`;
-      $("#pill-extra").textContent = `· Spoofing ${d.current}/${d.total}`;
     }
   } else if (d.job === "deletedm") {
     toast(d.done ? `DM cleanup done (${d.deleted})` : `Deleted ${d.deleted}...`);
@@ -587,7 +575,7 @@ function applyToggles(toggles) {
 const VIEW_TITLES = {
   overview: "Overview",
   presence: "Presence",
-  intel: "Intel & Tools",
+  intel: "Intel",
   servers: "Servers & Voice",
   dms: "DMs & Rules",
   system: "System",
@@ -620,7 +608,6 @@ async function loadOverview() {
     api("/api/v1/analytics").catch(() => ({ hourly: [], stats: {} })),
   ]);
   $("#acct-name").textContent = data.account.global_name || data.account.username;
-  $("#acct-mask").textContent = data.account.token_masked;
   if (data.account.avatar) $("#acct-avatar").src = data.account.avatar;
   $("#prefix-input").value = data.account.prefix;
   const todayMsgs = an.stats?.global_today ?? 0;
@@ -750,7 +737,76 @@ $("#btn-spoof-stop")?.addEventListener("click", async () => {
   toast("Stopping spoofer");
 });
 
-// ── 12. Intel, OSINT, Encoder & Vanity ────────────────────
+// ── 12. Intel, Detailed User Dossier, OSINT, Encoder & Vanity ──
+function renderUserDossier(res) {
+  $("#dossier-status-chip").textContent = res.status.toUpperCase();
+  const badgesHtml = res.badges?.length
+    ? res.badges.map((b) => `<span class="mini-tag volt">${esc(b)}</span>`).join("")
+    : `<span class="mini-tag">Standard Account</span>`;
+  const connHtml = res.connected_accounts?.length
+    ? `<div class="role-chip-row">${res.connected_accounts.map((c) => `<span class="mini-tag">${esc(c.type)}: ${esc(c.name)}</span>`).join("")}</div>`
+    : "";
+  const actHtml = res.activities?.length
+    ? res.activities.map((a) => `<div class="muted">${esc(a.type)}: ${esc(a.name)} ${a.detail ? `(${esc(a.detail)})` : ""}</div>`).join("")
+    : `<div class="muted">No active rich activity.</div>`;
+  const mutualHtml = res.mutuals?.length
+    ? res.mutuals.map((m) => `
+      <div class="mutual-row">
+        <div class="data-title">${esc(m.guild)}</div>
+        <div class="muted mono">Top: ${esc(m.top_role)} · Joined ${esc(m.joined)}${m.nick ? ` · Nick: ${esc(m.nick)}` : ""}${m.boosting ? ` · Boost ${esc(m.boosting)}` : ""}</div>
+        ${m.roles?.length ? `<div class="role-chip-row">${m.roles.map((r) => `<span class="mini-tag">${esc(r)}</span>`).join("")}</div>` : ""}
+      </div>`).join("")
+    : `<div class="muted">No mutual servers found.</div>`;
+
+  $("#profile-output").innerHTML = `
+    <div class="dossier-layout">
+      <div class="dossier-main">
+        ${res.banner ? `<div class="dossier-banner" style="background-image:url('${esc(res.banner)}')"></div>` : ""}
+        <div class="dossier-id-row">
+          <img class="dossier-avatar" src="${esc(res.avatar)}" alt="" />
+          <div class="dossier-names">
+            <div class="dossier-global">${esc(res.global_name)} ${res.pronouns ? `<span class="muted">(${esc(res.pronouns)})</span>` : ""}</div>
+            <div class="muted mono">@${esc(res.username)} · ${esc(res.user_id)}</div>
+            <div class="role-chip-row">${badgesHtml}</div>
+          </div>
+        </div>
+        ${res.bio ? `<div class="dossier-bio">${esc(res.bio)}</div>` : ""}
+        <div class="dossier-facts">
+          <div class="fact-cell"><div class="fact-label">Account Created</div><div class="fact-val mono">${esc(res.created_at)} (${res.age_days}d)</div></div>
+          <div class="fact-cell"><div class="fact-label">Type / Nitro</div><div class="fact-val">${res.is_bot ? "Bot" : "Human"}${res.nitro_since ? ` · Nitro (${esc(res.nitro_since)})` : ""}</div></div>
+          <div class="fact-cell"><div class="fact-label">Devices</div><div class="fact-val">${esc(res.platforms?.join(", ") || "Offline")}</div></div>
+          <div class="fact-cell"><div class="fact-label">Messages Logged</div><div class="fact-val mono">${res.messages_global ?? 0} total (${res.messages_today ?? 0} today)</div></div>
+        </div>
+        ${connHtml}
+      </div>
+
+      <aside class="dossier-corner">
+        <div class="corner-head">
+          <span>Presence &amp; Mutuals (${res.mutuals?.length ?? 0})</span>
+          <span class="mono">${esc(res.status)}</span>
+        </div>
+        ${actHtml}
+        ${res.voice ? `<div class="mini-tag volt">VC: ${esc(res.voice)}</div>` : ""}
+        <div class="divider"></div>
+        <div class="data-list" style="max-height:240px;">
+          ${mutualHtml}
+        </div>
+      </aside>
+    </div>`;
+}
+
+async function runUserLookup(uid) {
+  if (!uid) return toast("Enter a Discord User ID");
+  $("#dossier-status-chip").textContent = "Loading";
+  try {
+    const res = await api("/api/v1/intel/user-profile", { method: "POST", body: { user_id: uid } });
+    renderUserDossier(res);
+  } catch (err) {
+    $("#dossier-status-chip").textContent = "Error";
+    toast(err.message);
+  }
+}
+
 async function loadIntel() {
   const [sn, rd, kw, st, vn] = await Promise.all([
     api(`/api/v1/intel/snipes?q=${encodeURIComponent($("#snipe-search").value.trim())}`),
@@ -781,6 +837,11 @@ async function loadIntel() {
   $("#vanity-badge").textContent = vn.running ? `Watching: ${vn.target}` : "Standby";
 }
 
+$("#btn-profile-user")?.addEventListener("click", () => runUserLookup($("#stalk-uid").value.trim()));
+$("#btn-profile-self")?.addEventListener("click", () => {
+  $("#stalk-uid").value = "me";
+  runUserLookup("me");
+});
 $("#btn-snipe-search")?.addEventListener("click", loadIntel);
 $("#btn-radar-clear")?.addEventListener("click", async () => {
   await api("/api/v1/intel/radar", { method: "DELETE" });
@@ -837,15 +898,6 @@ $("#btn-stalk-add")?.addEventListener("click", async () => {
   toast("User added");
   loadIntel();
 });
-$("#btn-profile-user")?.addEventListener("click", async () => {
-  const res = await api("/api/v1/intel/user-profile", { method: "POST", body: { user_id: $("#stalk-uid").value.trim() } });
-  $("#profile-output").innerHTML = `
-    <div class="data-row"><div class="data-main">
-      <div class="data-title">${esc(res.username)} · ${esc(res.status)}</div>
-      <div class="muted">Platforms: ${esc(res.platforms.join(", ") || "None")} · Mutuals: ${res.mutuals.length}</div>
-      ${res.voice ? `<div class="muted">Voice: ${esc(res.voice)}</div>` : ""}
-    </div></div>`;
-});
 $("#btn-friends-backup")?.addEventListener("click", async () => {
   const r = await api("/api/v1/intel/friends", { method: "POST", body: { action: "backup" } });
   toast(`Saved snapshot (${r.count})`);
@@ -865,17 +917,37 @@ $("#btn-friends-diff")?.addEventListener("click", async () => {
 async function loadGuilds() {
   const data = await api("/api/v1/guilds");
   $("#guilds-list").innerHTML = data.guilds.map((g) => `
-    <div class="data-row">
-      <div class="data-main">
-        <div class="data-title">${esc(g.name)}</div>
-        <div class="muted mono">${esc(g.id)} · ${g.member_count} members · ${g.roles_count} roles</div>
+    <div class="guild-block">
+      <div class="data-row" style="padding:0;border:none;">
+        <div class="data-main">
+          <div class="data-title">${esc(g.name)}</div>
+          <div class="muted mono">${esc(g.id)} · ${g.member_count} members · ${g.roles_count} roles</div>
+        </div>
+        <div class="inline-actions">
+          <button class="btn-ghost-sm" data-toggle-chs="${esc(g.id)}">Channels (${(g.voice_channels?.length || 0) + (g.text_channels?.length || 0)})</button>
+          <button class="btn-tonal" data-audit="${esc(g.id)}">Audit</button>
+          <a class="m3-pill-btn" href="/api/v1/guilds/${esc(g.id)}/backup" style="text-decoration:none;">Backup</a>
+          <button class="${g.locked ? "btn-expressive" : "btn-danger-tonal"}" data-lock="${esc(g.id)}" data-state="${g.locked ? "unlock" : "lock"}">${g.locked ? "Unlock" : "Lockdown"}</button>
+        </div>
       </div>
-      <div class="inline-actions">
-        <button class="btn-tonal" data-audit="${esc(g.id)}">Audit</button>
-        <a class="m3-pill-btn" href="/api/v1/guilds/${esc(g.id)}/backup" style="text-decoration:none;">Backup</a>
-        <button class="${g.locked ? "btn-expressive" : "btn-danger-tonal"}" data-lock="${esc(g.id)}" data-state="${g.locked ? "unlock" : "lock"}">${g.locked ? "Unlock" : "Lockdown"}</button>
+      <div id="chs-${esc(g.id)}" class="guild-channels hidden">
+        ${(g.voice_channels || []).map((v) => `<button type="button" class="ch-pill" data-pick-vc="${esc(v.id)}">VC: ${esc(v.name)} (${v.members})</button>`).join("")}
+        ${(g.text_channels || []).slice(0, 12).map((t) => `<button type="button" class="ch-pill" data-pick-tc="${esc(t.id)}">#${esc(t.name)}</button>`).join("")}
       </div>
     </div>`).join("") || `<div class="muted">No servers loaded.</div>`;
+
+  $$("[data-toggle-chs]").forEach((b) => b.addEventListener("click", () => {
+    $(`#chs-${b.dataset.toggleChs}`)?.classList.toggle("hidden");
+  }));
+  $$("[data-pick-vc]").forEach((b) => b.addEventListener("click", () => {
+    $("#vc-channel-id").value = b.dataset.pickVc;
+    toast("Selected Voice Channel ID");
+  }));
+  $$("[data-pick-tc]").forEach((b) => b.addEventListener("click", () => {
+    $("#mod-ch-id").value = b.dataset.pickTc;
+    $("#dispatch-channel").value = b.dataset.pickTc;
+    toast("Copied Channel ID to Cleanup & Dispatch");
+  }));
 
   $$("[data-audit]").forEach((b) => b.addEventListener("click", async () => {
     const res = await api(`/api/v1/guilds/${b.dataset.audit}/audit`);
@@ -933,7 +1005,7 @@ $("#btn-treact-set")?.addEventListener("click", async () => {
   toast("Auto-react target updated");
 });
 
-// ── 14. DMs, Automation Rules & Bookmarks ─────────────────
+// ── 14. DMs, Automation Rules, Webhook & Bookmarks ────────
 async function loadDMs() {
   const [dmRes, bmRes, autoRes] = await Promise.all([
     api("/api/v1/dms"),
@@ -1021,6 +1093,15 @@ $("#btn-dispatch-send")?.addEventListener("click", async () => {
   $("#dispatch-content").value = "";
   toast("Sent");
 });
+$("#btn-wh-send")?.addEventListener("click", async () => {
+  const url = $("#wh-send-url").value.trim();
+  const content = $("#wh-send-content").value.trim();
+  const username = $("#wh-send-name").value.trim();
+  if (!url || !content) return toast("Webhook URL and message required");
+  await api("/api/v1/dispatch/webhook", { method: "POST", body: { url, content, username } });
+  $("#wh-send-content").value = "";
+  toast("Webhook sent");
+});
 $("#btn-bm-filter")?.addEventListener("click", loadDMs);
 $("#btn-accept-friends")?.addEventListener("click", async () => {
   const r = await api("/api/v1/intel/friends", { method: "POST", body: { action: "accept" } });
@@ -1065,48 +1146,6 @@ $("#btn-sys-restart")?.addEventListener("click", async () => {
 $("#btn-revoke-all")?.addEventListener("click", async () => {
   await api("/api/v1/auth/revoke", { method: "POST" });
   location.reload();
-});
-
-// ── 16. Cmd+K Quick Bar ───────────────────────────────────
-const PALETTE_ACTIONS = [
-  { label: "Go to Overview", run: () => switchView("overview") },
-  { label: "Go to Presence", run: () => switchView("presence") },
-  { label: "Go to Intel & Tools", run: () => switchView("intel") },
-  { label: "Go to Servers & Voice", run: () => switchView("servers") },
-  { label: "Go to DMs & Rules", run: () => switchView("dms") },
-  { label: "Go to System", run: () => switchView("system") },
-  { label: "Set Status: DND", run: () => api("/api/v1/presence/status", { method: "POST", body: { status: "dnd" } }).then(() => toast("Status: DND")) },
-  { label: "Set Status: Online", run: () => api("/api/v1/presence/status", { method: "POST", body: { status: "online" } }).then(() => toast("Status: Online")) },
-  { label: "Set Status: Invisible", run: () => api("/api/v1/presence/status", { method: "POST", body: { status: "invisible" } }).then(() => toast("Status: Invisible")) },
-  { label: "Pull Git & Reload Cogs", run: () => $("#btn-sys-update").click() },
-  { label: "Disconnect Voice", run: () => $("#btn-vc-leave").click() },
-];
-
-function openCmdk() {
-  const dlg = $("#cmdk-dialog");
-  $("#cmdk-input").value = "";
-  renderCmdk("");
-  dlg.showModal();
-}
-function renderCmdk(q) {
-  const matches = PALETTE_ACTIONS.filter((a) => a.label.toLowerCase().includes(q.toLowerCase()));
-  $("#cmdk-results").innerHTML = matches.map((a, i) => `<button class="cmdk-row" data-cmdk-idx="${i}">${esc(a.label)}</button>`).join("");
-  $$("[data-cmdk-idx]").forEach((b) => b.addEventListener("click", () => {
-    $("#cmdk-dialog").close();
-    matches[Number(b.dataset.cmdkIdx)].run();
-  }));
-}
-
-$("#btn-cmdk")?.addEventListener("click", openCmdk);
-$("#cmdk-input")?.addEventListener("input", (e) => renderCmdk(e.target.value));
-$("#cmdk-dialog")?.addEventListener("click", (e) => {
-  if (e.target === $("#cmdk-dialog")) $("#cmdk-dialog").close();
-});
-window.addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-    e.preventDefault();
-    openCmdk();
-  }
 });
 
 checkSession();

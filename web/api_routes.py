@@ -689,16 +689,22 @@ def register_routes(
         if not tools:
             return _json({"error": "Tools missing"}, status=503)
         data = await _body(request)
-        try:
-            uid = int(str(data.get("user_id", "")).strip())
-        except ValueError:
-            return _json({"error": "Enter a valid numeric Discord user ID"}, status=400)
+        raw_uid = str(data.get("user_id", "")).strip()
+        if raw_uid.lower() in ("me", "self", "@me") and getattr(bot, "user", None):
+            uid = int(bot.user.id)
+        else:
+            try:
+                uid = int(raw_uid)
+            except ValueError:
+                return _json({"error": "Enter a valid numeric Discord user ID (or 'me')"}, status=400)
 
         target = bot.get_user(uid)
         mutuals = []
         platforms: set[str] = set()
         live_status = "offline"
         voice_loc = None
+        activities_out: list[dict[str, str]] = []
+
         for g in bot.guilds:
             m = g.get_member(uid)
             if not m:
@@ -715,21 +721,104 @@ def register_routes(
                 platforms.add("Web")
             if m.voice and m.voice.channel and not voice_loc:
                 voice_loc = f"{g.name} / #{m.voice.channel.name}"
+            if not activities_out and getattr(m, "activities", None):
+                for a in m.activities:
+                    atype = getattr(a.type, "name", "activity") if hasattr(a, "type") else "activity"
+                    adet = getattr(a, "state", None) or getattr(a, "details", None) or ""
+                    activities_out.append({"type": atype, "name": getattr(a, "name", "") or "", "detail": str(adet)})
+            roles_list = [r.name for r in reversed(m.roles) if not r.is_default()][:8]
+            joined_iso = m.joined_at.strftime("%Y-%m-%d") if getattr(m, "joined_at", None) else "—"
+            boost_iso = m.premium_since.strftime("%Y-%m-%d") if getattr(m, "premium_since", None) else ""
             mutuals.append({
                 "guild": g.name,
                 "guild_id": str(g.id),
                 "nick": m.nick or "",
-                "top_role": m.top_role.name if m.top_role else "none",
+                "top_role": m.top_role.name if m.top_role and not m.top_role.is_default() else "@everyone",
+                "joined": joined_iso,
+                "boosting": boost_iso,
+                "roles": roles_list,
             })
+
+        if not target:
+            try:
+                target = await bot.fetch_user(uid)
+            except Exception:
+                target = None
+
+        badges: list[str] = []
+        flags = getattr(target, "public_flags", None) if target else None
+        if flags:
+            flag_names = [
+                ("staff", "Staff"), ("partner", "Partner"), ("hypesquad", "HypeSquad"),
+                ("hypesquad_bravery", "Bravery"), ("hypesquad_brilliance", "Brilliance"),
+                ("hypesquad_balance", "Balance"), ("bug_hunter", "Bug Hunter"),
+                ("bug_hunter_level_2", "Bug Hunter II"), ("early_supporter", "Early Supporter"),
+                ("verified_bot_developer", "Verified Bot Dev"), ("active_developer", "Active Dev"),
+            ]
+            for attr, label in flag_names:
+                if getattr(flags, attr, False):
+                    badges.append(label)
+
+        # Enrich with Discord REST profile when token is active
+        bio = ""
+        pronouns = ""
+        banner_url = str(target.banner.url) if target and getattr(target, "banner", None) else ""
+        nitro_since = ""
+        connected: list[dict[str, str]] = []
+        token_val = getattr(bot.http, "token", "") or ""
+        if token_val:
+            try:
+                resp = await tools._get_http_client().get(
+                    f"https://discord.com/api/v9/users/{uid}/profile?with_mutual_guilds=false&with_mutual_friends=false",
+                    headers={"Authorization": token_val},
+                )
+                if resp.status_code == 200:
+                    pdata = resp.json()
+                    up = pdata.get("user_profile") or {}
+                    bio = up.get("bio") or ""
+                    pronouns = up.get("pronouns") or ""
+                    nitro_since = (pdata.get("premium_since") or "")[:10]
+                    connected = [
+                        {"type": str(c.get("type", "")), "name": str(c.get("name", ""))}
+                        for c in (pdata.get("connected_accounts") or [])[:8]
+                    ]
+                    uobj = pdata.get("user") or {}
+                    if uobj.get("banner") and not banner_url:
+                        ext = "gif" if str(uobj["banner"]).startswith("a_") else "png"
+                        banner_url = f"https://cdn.discordapp.com/banners/{uid}/{uobj['banner']}.{ext}?size=600"
+            except Exception:
+                pass
+
+        created_iso = "—"
+        age_days = 0
+        if target and getattr(target, "created_at", None):
+            created_iso = target.created_at.strftime("%Y-%m-%d %H:%M UTC")
+            age_days = max(0, int((time.time() - target.created_at.timestamp()) // 86400))
+
+        from data.tracker import tracker
+        msg_stats = tracker.get_stats(uid, None)
 
         return _json({
             "user_id": str(uid),
             "username": str(target) if target else f"User {uid}",
+            "global_name": getattr(target, "global_name", None) or (target.name if target else f"User {uid}"),
             "avatar": str(target.display_avatar.url) if target and getattr(target, "display_avatar", None) else "",
+            "banner": banner_url,
+            "is_bot": bool(getattr(target, "bot", False)),
+            "created_at": created_iso,
+            "age_days": age_days,
+            "badges": badges,
+            "bio": bio,
+            "pronouns": pronouns,
+            "nitro_since": nitro_since,
+            "connected_accounts": connected,
             "status": live_status,
             "platforms": sorted(platforms),
+            "activities": activities_out,
             "voice": voice_loc,
             "mutuals": mutuals,
+            "messages_global": msg_stats.get("global_all", 0),
+            "messages_today": msg_stats.get("global_today", 0),
         })
 
     # ── Guilds, Moderation & Voice ────────────────────────────────────────────
@@ -767,6 +856,25 @@ def register_routes(
             return _json({"error": "Channel not found"}, status=404)
         msg = await ch.send(content)
         return _json({"ok": True, "message_id": str(msg.id)})
+
+    async def dispatch_webhook(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        tools = bot.get_cog("Tools")
+        if not tools:
+            return _json({"error": "Tools missing"}, status=503)
+        data = await _body(request)
+        url = str(data.get("url", "")).strip()
+        content = str(data.get("content", "")).strip()[:2000]
+        username = str(data.get("username", "")).strip()[:80]
+        if not url.startswith("https://discord.com/api/webhooks/") and not url.startswith("https://canary.discord.com/api/webhooks/"):
+            return _json({"error": "Valid Discord webhook URL required"}, status=400)
+        if not content:
+            return _json({"error": "Message content required"}, status=400)
+        payload: dict[str, Any] = {"content": content}
+        if username:
+            payload["username"] = username
+        r = await tools._get_http_client().post(url, json=payload)
+        return _json({"ok": r.status_code in (200, 204), "status": r.status_code})
 
     async def audit_guild(request: web.Request) -> web.Response:
         auth.authenticate_request(request)
@@ -1206,6 +1314,7 @@ def register_routes(
     r.add_get("/api/v1/guilds", list_guilds)
     r.add_post("/api/v1/guilds/cleanup", guild_cleanup)
     r.add_post("/api/v1/dispatch/send", dispatch_send)
+    r.add_post("/api/v1/dispatch/webhook", dispatch_webhook)
     r.add_get("/api/v1/guilds/{id}/audit", audit_guild)
     r.add_get("/api/v1/guilds/{id}/backup", backup_guild_download)
     r.add_post("/api/v1/guilds/lockdown", guild_lockdown)
