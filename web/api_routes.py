@@ -65,6 +65,33 @@ def _snapshot_overview(bot: Any, logs_fn: Callable[[], list[dict[str, str]]]) ->
             active_vc = {"id": str(ch.id), "name": ch.name, "guild": ch.guild.name}
             break
 
+    # Gather presence config from Status cog for frontend hydration
+    presence_config = {}
+    if status:
+        presence_config = {
+            "online_status": getattr(status, "_online_status", "online"),
+            "activity_kind": getattr(status, "_activity_kind", "globe"),
+            "activity_title": getattr(status, "_activity_title", ""),
+            "activity_extra": getattr(status, "_activity_extra", ""),
+            "custom_status_text": getattr(status, "_custom_status_text", ""),
+            "hypesquad_house": getattr(status, "_hypesquad_house", "leave"),
+            "bio_text": getattr(status, "_bio_text", ""),
+            "rotate_interval": getattr(status, "_rotate_interval", 15.0),
+            "rotate_slides": getattr(status, "_rotate_slides", []),
+        }
+
+    # Gather spoofer live stats
+    spoofer_stats = {
+        "running": bool(getattr(status, "_spoofer_running", False)) if status else False,
+        "current": getattr(status, "_spoofer_current", 0) if status else 0,
+        "total": getattr(status, "_spoofer_total", 0) if status else 0,
+        "game": getattr(status, "_spoofer_game", "") if status else "",
+        "app_id": getattr(status, "_spoofer_app_id", "") if status else "",
+        "interval": getattr(status, "_spoofer_interval", 6.0) if status else 6.0,
+        "elapsed_s": int(time.time() - status._spoofer_started_at) if status and getattr(status, "_spoofer_running", False) and getattr(status, "_spoofer_started_at", 0) else 0,
+        "completed_total": getattr(status, "_spoofer_completed_total", 0) if status else 0,
+    }
+
     return {
         "account": {
             "id": str(user.id) if user else "0",
@@ -74,6 +101,8 @@ def _snapshot_overview(bot: Any, logs_fn: Callable[[], list[dict[str, str]]]) ->
             "token_masked": global_auth.masked(),
             "prefix": settings.prefix,
         },
+        "presence_config": presence_config,
+        "spoofer": spoofer_stats,
         "runtime": {
             "uptime_s": int(getattr(bot, "uptime_seconds", 0.0)),
             "latency_ms": lat_ms,
@@ -117,10 +146,19 @@ def register_routes(
 
     # ── Auth ──────────────────────────────────────────────────────────────────
 
+    def _sync_active_account_vault() -> None:
+        user = getattr(bot, "user", None)
+        tok = auth._token_provider() or getattr(getattr(bot, "http", None), "token", "") or ""
+        if user and tok:
+            avatar = str(user.display_avatar.url) if getattr(user, "display_avatar", None) else ""
+            gname = getattr(user, "global_name", None) or getattr(user, "name", None) or str(user)
+            auth.register_account(str(user.id), str(user), gname, avatar, tok)
+
     async def auth_me(request: web.Request) -> web.Response:
         session = auth.verify_cookie(request.cookies.get(COOKIE_NAME))
         if not session:
             return _json({"authenticated": False})
+        _sync_active_account_vault()
         user = getattr(bot, "user", None)
         return _json({
             "authenticated": True,
@@ -129,6 +167,7 @@ def register_routes(
             "account": {
                 "id": str(user.id) if user else "0",
                 "username": str(user) if user else "Globe",
+                "global_name": getattr(user, "global_name", None) or (user.name if user else "Globe"),
                 "avatar": str(user.display_avatar.url) if user and getattr(user, "display_avatar", None) else "",
                 "token_masked": global_auth.masked(),
             },
@@ -151,6 +190,7 @@ def register_routes(
             return _json({"error": "Invalid Discord account token."}, status=401)
 
         auth.clear_failures(ip)
+        _sync_active_account_vault()
         ttl = 86400 * 7 if remember else 86400
         cookie_val, csrf = auth.create_session(ttl_seconds=ttl)
         resp = _json({"authenticated": True, "csrf": csrf})
@@ -243,11 +283,18 @@ def register_routes(
         auth.authenticate_request(request, require_csrf=True)
         data = await _body(request)
         text = str(data.get("text", "")).strip()
+        status = bot.get_cog("Status")
         if not text:
             await bot.change_presence(activities=[])
+            if status:
+                status._custom_status_text = ""
+                status._save_str("custom_status_text", "")
             return _json({"ok": True, "state": "cleared"})
         act = discord.CustomActivity(name="Custom Status", state=text[:128])
         await bot.change_presence(activities=[act])
+        if status:
+            status._custom_status_text = text[:128]
+            status._save_str("custom_status_text", text[:128])
         return _json({"ok": True, "state": text[:128]})
 
     async def set_online_status(request: web.Request) -> web.Response:
@@ -264,6 +311,10 @@ def register_routes(
         if not st:
             return _json({"error": "Use online, idle, dnd, or invisible"}, status=400)
         await bot.change_presence(status=st)
+        status = bot.get_cog("Status")
+        if status:
+            status._online_status = mode
+            status._save_str("online_status", mode)
         return _json({"ok": True, "status": mode})
 
     async def set_rich_activity(request: web.Request) -> web.Response:
@@ -274,8 +325,16 @@ def register_routes(
         url = str(data.get("url", "")).strip()
         elapsed = str(data.get("elapsed", "")).strip()
 
+        status = bot.get_cog("Status")
         if kind == "clear":
             await bot.change_presence(activity=None)
+            if status:
+                status._activity_kind = "clear"
+                status._activity_title = ""
+                status._activity_extra = ""
+                status._save_str("activity_kind", "clear")
+                status._save_str("activity_title", "")
+                status._save_str("activity_extra", "")
             return _json({"ok": True, "kind": "clear"})
 
         if kind == "globe":
@@ -298,7 +357,15 @@ def register_routes(
             start_epoch = time.time() - max(0.0, offset)
             bot._start_epoch = start_epoch
             uid = bot.user.id if bot.user else 0
-            await bot.change_presence(activities=get_default_globe_activities(uid, start_epoch))
+            st_enum = status._discord_status_enum() if status else discord.Status.online
+            await bot.change_presence(activities=get_default_globe_activities(uid, start_epoch), status=st_enum)
+            if status:
+                status._activity_kind = "globe"
+                status._activity_title = "Globe"
+                status._activity_extra = elapsed
+                status._save_str("activity_kind", "globe")
+                status._save_str("activity_title", "Globe")
+                status._save_str("activity_extra", elapsed)
             return _json({"ok": True, "kind": "globe", "offset_s": int(offset)})
 
         if not title:
@@ -313,6 +380,14 @@ def register_routes(
         else:
             act = discord.Game(name=title)
         await bot.change_presence(activity=act)
+        status = bot.get_cog("Status")
+        if status:
+            status._activity_kind = kind
+            status._activity_title = title
+            status._activity_extra = url or elapsed
+            status._save_str("activity_kind", kind)
+            status._save_str("activity_title", title)
+            status._save_str("activity_extra", url or elapsed)
         return _json({"ok": True, "kind": kind, "title": title})
 
     async def set_bio(request: web.Request) -> web.Response:
@@ -330,6 +405,10 @@ def register_routes(
         )
         if resp.status_code != 200:
             return _json({"error": f"Discord HTTP {resp.status_code}"}, status=resp.status_code)
+        status = bot.get_cog("Status")
+        if status:
+            status._bio_text = text
+            status._save_str("bio_text", text)
         return _json({"ok": True, "bio": text})
 
     async def set_hypesquad(request: web.Request) -> web.Response:
@@ -348,6 +427,10 @@ def register_routes(
             resp = await client.post("https://discord.com/api/v9/hypesquad/online", headers={"Authorization": token_val}, json={"house_id": house_map[house]})
         else:
             return _json({"error": "Choose bravery, brilliance, balance, or leave"}, status=400)
+        status = bot.get_cog("Status")
+        if status and resp.status_code in (200, 204):
+            status._hypesquad_house = house
+            status._save_str("hypesquad_house", house)
         return _json({"ok": resp.status_code in (200, 204), "status_code": resp.status_code})
 
     async def set_status_rotate(request: web.Request) -> web.Response:
@@ -384,6 +467,10 @@ def register_routes(
             except asyncio.CancelledError:
                 pass
 
+        status._rotate_interval = delay
+        status._rotate_slides = items
+        status._save_str("rotate_interval", str(delay))
+        status._save_str("rotate_slides", "\n".join(items))
         status._rotate_task = asyncio.create_task(_rotator())
         return _json({"ok": True, "rotating": True, "slides": len(items), "interval": delay})
 
@@ -409,39 +496,80 @@ def register_routes(
         async def _run_spoofer() -> None:
             status._spoofer_running = True
             status._spoofer_cancel = False
+            batch_start = time.time()
+            status._spoofer_started_at = batch_start
+            status._spoofer_total = count
+            status._spoofer_current = 0
+            status._spoofer_game = "Loading catalog..."
+            status._spoofer_app_id = ""
+            status._spoofer_interval = interval
             try:
                 resp = await tools._get_http_client().get("https://discord.com/api/v9/applications/detectable")
                 catalog = [g for g in resp.json() if g.get("id") and g.get("name") and g.get("executables")]
                 selected = random.sample(catalog, min(count, len(catalog)))
+                total = len(selected)
+                status._spoofer_total = total
+                st_enum = status._discord_status_enum()
                 for idx, game in enumerate(selected, 1):
                     if status._spoofer_cancel:
                         break
+                    gname = game["name"]
+                    gid = str(game["id"])
+                    status._spoofer_current = idx
+                    status._spoofer_game = gname
+                    status._spoofer_app_id = gid
+                    status._spoofer_completed_total += 1
                     act = discord.Activity(
                         type=discord.ActivityType.playing,
                         application_id=int(game["id"]),
-                        name=game["name"],
+                        name=gname,
                         details="In-Game",
                         timestamps={"start": int(time.time() * 1000)},
                     )
-                    await bot.change_presence(activities=[act])
-                    await broadcast({
-                        "type": "job",
-                        "data": {"job": "spoofer", "current": idx, "total": len(selected), "game": game["name"], "done": False},
-                    })
-                    for _ in range(int(interval * 2)):
+                    await bot.change_presence(activities=[act], status=st_enum)
+                    ticks = max(1, int(interval))
+                    for sec_i in range(ticks):
                         if status._spoofer_cancel:
                             break
-                        await asyncio.sleep(0.5)
-                if status._startup_rpc_enabled:
-                    await status.apply_default_rpc()
-                else:
-                    await bot.change_presence(activities=[])
-                await broadcast({"type": "job", "data": {"job": "spoofer", "done": True}})
+                        elapsed_s = int(time.time() - batch_start)
+                        remaining_s = max(0, int((total - idx) * interval + (ticks - sec_i)))
+                        pct = int((idx / max(1, total)) * 100)
+                        await broadcast({
+                            "type": "job",
+                            "data": {
+                                "job": "spoofer",
+                                "current": idx,
+                                "total": total,
+                                "game": gname,
+                                "app_id": gid,
+                                "elapsed_s": elapsed_s,
+                                "remaining_s": remaining_s,
+                                "pct": pct,
+                                "completed_total": status._spoofer_completed_total,
+                                "done": False,
+                            },
+                        })
+                        await asyncio.sleep(1.0)
+                await status.apply_default_rpc()
+                status._save_str("spoofer_completed_total", str(status._spoofer_completed_total))
+                await broadcast({
+                    "type": "job",
+                    "data": {
+                        "job": "spoofer",
+                        "done": True,
+                        "cancelled": status._spoofer_cancel,
+                        "completed_total": status._spoofer_completed_total,
+                        "elapsed_s": int(time.time() - batch_start),
+                    },
+                })
             except Exception as e:
                 log_err(f"Web spoofer error: {e}")
+                await broadcast({"type": "job", "data": {"job": "spoofer", "done": True, "error": str(e)}})
             finally:
                 status._spoofer_running = False
                 status._spoofer_cancel = False
+                status._spoofer_game = ""
+                status._spoofer_app_id = ""
 
         asyncio.create_task(_run_spoofer())
         return _json({"ok": True, "running": True, "count": count, "interval": interval})
@@ -1270,12 +1398,121 @@ def register_routes(
             "react": [{"user_id": str(u), "emoji": e} for u, e in troll._react_targets.items()],
         })
 
+    # ── Multi-Account Vault & Token Management ────────────────────────────────
+
+    async def _verify_discord_token(raw_token: str) -> dict[str, Any]:
+        clean = raw_token.strip().strip("'\"")
+        if len(clean) < 30:
+            raise ValueError("Token format is too short.")
+        tools = bot.get_cog("Tools")
+        if not tools:
+            raise RuntimeError("Tools HTTP client unavailable")
+        resp = await tools._get_http_client().get(
+            "https://discord.com/api/v9/users/@me",
+            headers={"Authorization": clean},
+        )
+        if resp.status_code != 200:
+            raise ValueError(f"Discord rejected token (HTTP {resp.status_code}).")
+        u = resp.json()
+        uid = str(u.get("id", ""))
+        uname = f"{u.get('username', 'user')}#{u.get('discriminator', '0')}"
+        gname = u.get("global_name") or u.get("username") or uname
+        av = u.get("avatar")
+        avatar_url = f"https://cdn.discordapp.com/avatars/{uid}/{av}.png?size=128" if av and uid else ""
+        return {"id": uid, "username": uname, "global_name": gname, "avatar": avatar_url, "token": clean}
+
+    def _activate_token_and_restart(new_token: str) -> None:
+        from dotenv import set_key
+        clean = new_token.strip().strip("'\"")
+        env_path = Path(".env")
+        if not env_path.exists():
+            env_path.write_text("", encoding="utf-8")
+        set_key(str(env_path), "DISCORD_TOKEN", clean)
+        global_auth._token = clean
+        global_auth.save_token_to_file(clean)
+        settings.discord_token = clean  # type: ignore[misc]
+        os.environ["DISCORD_TOKEN"] = clean
+
+        async def _delayed_exec() -> None:
+            await asyncio.sleep(1.0)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        asyncio.create_task(_delayed_exec())
+
+    async def accounts_list(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        _sync_active_account_vault()
+        uid = str(bot.user.id) if getattr(bot, "user", None) else ""
+        return _json({"accounts": auth.list_accounts(uid)})
+
+    async def accounts_add(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        data = await _body(request)
+        tok = str(data.get("token", "")).strip()
+        switch_now = bool(data.get("switch_now", False))
+        try:
+            info = await _verify_discord_token(tok)
+        except ValueError as exc:
+            return _json({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return _json({"error": str(exc)}, status=503)
+
+        auth.register_account(info["id"], info["username"], info["global_name"], info["avatar"], info["token"])
+        global_auth.save_token_to_file(info["token"])
+        if switch_now:
+            _activate_token_and_restart(info["token"])
+            return _json({"ok": True, "restarting": True, "active_id": info["id"]})
+        uid = str(bot.user.id) if getattr(bot, "user", None) else ""
+        return _json({"ok": True, "accounts": auth.list_accounts(uid), "added": info["id"]})
+
+    async def accounts_delete(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        aid = str(request.match_info["id"])
+        uid = str(bot.user.id) if getattr(bot, "user", None) else ""
+        if aid == uid:
+            return _json({"error": "Cannot remove the currently active account."}, status=400)
+        tok = auth.get_account_token(aid)
+        ok = auth.remove_account(aid)
+        if tok:
+            global_auth.remove_token_from_file(tok)
+        return _json({"ok": ok, "accounts": auth.list_accounts(uid)})
+
+    async def accounts_switch(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        data = await _body(request)
+        aid = str(data.get("account_id", "")).strip()
+        tok = auth.get_account_token(aid) if aid else str(data.get("token", "")).strip()
+        if not tok:
+            return _json({"error": "Account token not found in vault."}, status=404)
+        _activate_token_and_restart(tok)
+        return _json({"ok": True, "restarting": True, "account_id": aid})
+
+    async def update_active_token(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        data = await _body(request)
+        tok = str(data.get("token", "")).strip()
+        try:
+            info = await _verify_discord_token(tok)
+        except ValueError as exc:
+            return _json({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return _json({"error": str(exc)}, status=503)
+        auth.register_account(info["id"], info["username"], info["global_name"], info["avatar"], info["token"])
+        _activate_token_and_restart(info["token"])
+        return _json({"ok": True, "restarting": True, "account_id": info["id"], "username": info["username"]})
+
     # Register Routes
     r = app.router
     r.add_get("/api/v1/auth/me", auth_me)
     r.add_post("/api/v1/auth/login", auth_login)
     r.add_post("/api/v1/auth/logout", auth_logout)
     r.add_post("/api/v1/auth/revoke", auth_revoke)
+
+    r.add_get("/api/v1/accounts", accounts_list)
+    r.add_post("/api/v1/accounts", accounts_add)
+    r.add_delete("/api/v1/accounts/{id}", accounts_delete)
+    r.add_post("/api/v1/accounts/switch", accounts_switch)
+    r.add_post("/api/v1/settings/token", update_active_token)
 
     r.add_get("/api/v1/overview", get_overview)
     r.add_get("/api/v1/analytics", get_analytics)

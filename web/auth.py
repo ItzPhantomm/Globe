@@ -141,6 +141,86 @@ class DashboardAuth:
         except Exception:
             return None
 
+    # ── Encrypted Multi-Account Switcher Vault ────────────────
+
+    def _vault_seal(self, plaintext: str) -> str:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        nonce = os.urandom(12)
+        aes = AESGCM(self._secret)
+        ct = aes.encrypt(nonce, plaintext.encode("utf-8"), None)
+        return base64.b64encode(nonce + ct).decode("ascii")
+
+    def _vault_open(self, sealed: str) -> str | None:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        try:
+            raw = base64.b64decode(sealed)
+            aes = AESGCM(self._secret)
+            return aes.decrypt(raw[:12], raw[12:], None).decode("utf-8")
+        except Exception:
+            return None
+
+    def _load_accounts_map(self) -> dict[str, dict[str, str]]:
+        try:
+            from data.tracker import tracker
+            raw = tracker.get_state("account_profiles")
+            if raw:
+                data = json.loads(raw)
+                return data if isinstance(data, dict) else {}
+        except Exception:
+            pass
+        return {}
+
+    def _save_accounts_map(self, data: dict[str, dict[str, str]]) -> None:
+        try:
+            from data.tracker import tracker
+            tracker.set_state("account_profiles", json.dumps(data))
+        except Exception:
+            pass
+
+    def register_account(self, user_id: str, username: str, global_name: str, avatar: str, raw_token: str) -> None:
+        clean = (raw_token or "").strip().strip("'\"")
+        if not user_id or not clean:
+            return
+        accounts = self._load_accounts_map()
+        masked = (clean[:6] + "●" * 10 + clean[-4:]) if len(clean) >= 12 else "****"
+        accounts[str(user_id)] = {
+            "id": str(user_id),
+            "username": username,
+            "global_name": global_name or username,
+            "avatar": avatar,
+            "masked": masked,
+            "enc_token": self._vault_seal(clean),
+        }
+        self._save_accounts_map(accounts)
+
+    def list_accounts(self, active_id: str | None = None) -> list[dict[str, Any]]:
+        accounts = self._load_accounts_map()
+        out = []
+        for aid, item in accounts.items():
+            out.append({
+                "id": item.get("id", aid),
+                "username": item.get("username", "Unknown"),
+                "global_name": item.get("global_name", item.get("username", "Unknown")),
+                "avatar": item.get("avatar", ""),
+                "masked": item.get("masked", "****"),
+                "active": str(aid) == str(active_id or ""),
+            })
+        return out
+
+    def get_account_token(self, account_id: str) -> str | None:
+        item = self._load_accounts_map().get(str(account_id))
+        if not item or not item.get("enc_token"):
+            return None
+        return self._vault_open(item["enc_token"])
+
+    def remove_account(self, account_id: str) -> bool:
+        accounts = self._load_accounts_map()
+        if str(account_id) in accounts:
+            accounts.pop(str(account_id))
+            self._save_accounts_map(accounts)
+            return True
+        return False
+
     def authenticate_request(self, request: web.Request, require_csrf: bool = False) -> dict[str, Any]:
         """Raise HTTPUnauthorized / HTTPForbidden if session or CSRF is invalid."""
         session = self.verify_cookie(request.cookies.get(COOKIE_NAME))

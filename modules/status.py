@@ -106,9 +106,46 @@ class Status(commands.Cog):
         self._init_done: bool = False
         self._spoofer_running: bool = False
         self._spoofer_cancel: bool = False
+        self._spoofer_current: int = 0
+        self._spoofer_total: int = 0
+        self._spoofer_game: str = ""
+        self._spoofer_app_id: str = ""
+        self._spoofer_interval: float = 6.0
+        self._spoofer_started_at: float = 0.0
+        self._spoofer_completed_total: int = int(self._load_str("spoofer_completed_total", "0") or 0)
         self._rotate_task: asyncio.Task | None = None
         self._startup_rpc_enabled: bool = self._load_rpc_flag("startup_rpc", default=True)
         self._custom_status_enabled: bool = self._load_rpc_flag("startup_custom_status", default=False)
+        self._online_status: str = self._load_str("online_status", "online")
+        self._custom_status_text: str = self._load_str("custom_status_text", "")
+        self._bio_text: str = self._load_str("bio_text", "")
+        self._activity_kind: str = self._load_str(
+            "activity_kind", "globe" if self._startup_rpc_enabled else "clear"
+        )
+        self._activity_title: str = self._load_str("activity_title", "Globe")
+        self._activity_extra: str = self._load_str("activity_extra", "")
+        self._hypesquad_house: str = self._load_str("hypesquad_house", "leave")
+        self._rotate_interval: float = float(self._load_str("rotate_interval", "15") or 15)
+        self._rotate_slides: list[str] = [
+            s for s in self._load_str("rotate_slides", "").split("\n") if s.strip()
+        ]
+
+    @staticmethod
+    def _load_str(key: str, default: str) -> str:
+        try:
+            from data.tracker import tracker
+            val = tracker.get_state(key)
+            return val if val is not None else default
+        except Exception:
+            return default
+
+    @staticmethod
+    def _save_str(key: str, value: str) -> None:
+        try:
+            from data.tracker import tracker
+            tracker.set_state(key, value)
+        except Exception:
+            pass
 
     @staticmethod
     def _load_rpc_flag(key: str, default: bool) -> bool:
@@ -129,21 +166,46 @@ class Status(commands.Cog):
         except Exception:
             pass
 
+    def _discord_status_enum(self) -> discord.Status:
+        return {
+            "online": discord.Status.online,
+            "idle": discord.Status.idle,
+            "dnd": discord.Status.dnd,
+            "invisible": discord.Status.invisible,
+        }.get(self._online_status, discord.Status.online)
+
     async def apply_default_rpc(self) -> bool:
-        """Apply Globe Rich Presence on startup only if enabled; otherwise leave user status intact."""
-        if not self._startup_rpc_enabled:
+        """Apply saved Globe Rich Presence or custom activity on startup; honor online status."""
+        st_enum = self._discord_status_enum()
+        if not self._startup_rpc_enabled and self._activity_kind == "clear":
             self._init_done = True
             log_info("Startup Globe RPC is disabled (user status left intact).")
             return True
         try:
             user_id = self.bot.user.id if self.bot.user else None
             start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
-            activities = get_default_globe_activities(
-                user_id,
-                start_epoch,
-                include_custom_status=self._custom_status_enabled,
-            )
-            await self.bot.change_presence(activities=activities)
+            activities: list[discord.BaseActivity] = []
+            if self._startup_rpc_enabled and self._activity_kind == "globe":
+                activities = get_default_globe_activities(
+                    user_id,
+                    start_epoch,
+                    include_custom_status=self._custom_status_enabled,
+                )
+            elif self._activity_kind == "streaming" and self._activity_title:
+                activities = [discord.Streaming(name=self._activity_title, url=self._activity_extra or "https://twitch.tv/twitch")]
+            elif self._activity_kind == "listening" and self._activity_title:
+                activities = [discord.Activity(type=discord.ActivityType.listening, name=self._activity_title)]
+            elif self._activity_kind == "watching" and self._activity_title:
+                activities = [discord.Activity(type=discord.ActivityType.watching, name=self._activity_title)]
+            elif self._activity_kind == "playing" and self._activity_title:
+                activities = [discord.Game(name=self._activity_title)]
+            if self._custom_status_text:
+                activities.append(discord.CustomActivity(name="Custom Status", state=self._custom_status_text[:128]))
+
+            if activities:
+                await self.bot.change_presence(activities=activities, status=st_enum)
+            elif self._online_status != "online":
+                await self.bot.change_presence(status=st_enum)
             self._init_done = True
             log_info("Rpc Initialized successful")
             return True
@@ -172,7 +234,9 @@ class Status(commands.Cog):
         m = (mode or "").lower().strip()
         if m in ("off", "disable", "0"):
             self._startup_rpc_enabled = False
+            self._activity_kind = "clear"
             self._save_rpc_flag("startup_rpc", False)
+            self._save_str("activity_kind", "clear")
             await self.bot.change_presence(activities=[])
             await ctx.send("\n".join([
                 "> `-` **Globe Startup RPC** · `DISABLED`",
@@ -186,7 +250,9 @@ class Status(commands.Cog):
             self._save_rpc_flag("startup_custom_status", self._custom_status_enabled)
         else:
             self._startup_rpc_enabled = True
+            self._activity_kind = "globe"
             self._save_rpc_flag("startup_rpc", True)
+            self._save_str("activity_kind", "globe")
 
         user_id = self.bot.user.id if self.bot.user else ctx.author.id
         start_epoch = getattr(self.bot, "_start_epoch", None) or time.time()
@@ -268,6 +334,12 @@ class Status(commands.Cog):
         await ctx.message.delete()
         activity = discord.Streaming(name=title, url=stream_url)
         await self.bot.change_presence(activity=activity)
+        self._activity_kind = "streaming"
+        self._activity_title = title[:128]
+        self._activity_extra = stream_url
+        self._save_str("activity_kind", "streaming")
+        self._save_str("activity_title", self._activity_title)
+        self._save_str("activity_extra", stream_url)
         msg = await ctx.send(f"💜 Presence updated to **Streaming**: `{title}`")
         await msg.delete(delay=4)
 
@@ -277,6 +349,12 @@ class Status(commands.Cog):
         await ctx.message.delete()
         activity = discord.Game(name=game)
         await self.bot.change_presence(activity=activity)
+        self._activity_kind = "playing"
+        self._activity_title = game[:128]
+        self._activity_extra = ""
+        self._save_str("activity_kind", "playing")
+        self._save_str("activity_title", self._activity_title)
+        self._save_str("activity_extra", "")
         msg = await ctx.send(f"🎮 Presence updated to **Playing**: `{game}`")
         await msg.delete(delay=4)
 
@@ -286,6 +364,12 @@ class Status(commands.Cog):
         await ctx.message.delete()
         activity = discord.Activity(type=discord.ActivityType.listening, name=music)
         await self.bot.change_presence(activity=activity)
+        self._activity_kind = "listening"
+        self._activity_title = music[:128]
+        self._activity_extra = ""
+        self._save_str("activity_kind", "listening")
+        self._save_str("activity_title", self._activity_title)
+        self._save_str("activity_extra", "")
         msg = await ctx.send(f"🎧 Presence updated to **Listening to**: `{music}`")
         await msg.delete(delay=4)
 
@@ -295,6 +379,12 @@ class Status(commands.Cog):
         await ctx.message.delete()
         activity = discord.Activity(type=discord.ActivityType.watching, name=movie)
         await self.bot.change_presence(activity=activity)
+        self._activity_kind = "watching"
+        self._activity_title = movie[:128]
+        self._activity_extra = ""
+        self._save_str("activity_kind", "watching")
+        self._save_str("activity_title", self._activity_title)
+        self._save_str("activity_extra", "")
         msg = await ctx.send(f"🎬 Presence updated to **Watching**: `{movie}`")
         await msg.delete(delay=4)
 
@@ -303,6 +393,12 @@ class Status(commands.Cog):
         """Clear active Rich Presence activity."""
         await ctx.message.delete()
         await self.bot.change_presence(activity=None)
+        self._activity_kind = "clear"
+        self._activity_title = ""
+        self._activity_extra = ""
+        self._save_str("activity_kind", "clear")
+        self._save_str("activity_title", "")
+        self._save_str("activity_extra", "")
         msg = await ctx.send("🧹 Activity status cleared.")
         await msg.delete(delay=4)
 
@@ -317,6 +413,9 @@ class Status(commands.Cog):
             "invisible": discord.Status.invisible,
             "offline": discord.Status.invisible,
         }
+        mode = status_type.lower().strip()
+        if mode == "offline":
+            mode = "invisible"
         st = mapping.get(status_type.lower())
         if not st:
             msg = await ctx.send("❌ Status must be one of: `online`, `idle`, `dnd`, `invisible`")
@@ -324,7 +423,9 @@ class Status(commands.Cog):
             return
 
         await self.bot.change_presence(status=st)
-        msg = await ctx.send(f"🟢 Status set to `{status_type.lower()}`")
+        self._online_status = mode
+        self._save_str("online_status", mode)
+        msg = await ctx.send(f"🟢 Status set to `{mode}`")
         await msg.delete(delay=4)
 
     @commands.command(name="publicrpc", aliases=["makepublic", "shareactivity"])
@@ -403,6 +504,8 @@ class Status(commands.Cog):
                     await ctx.send("> `!` Choose `bravery`, `brilliance`, `balance`, or `leave`.", delete_after=5)
                     return
             if resp.status_code in (200, 204):
+                self._hypesquad_house = choice if choice in house_map else "leave"
+                self._save_str("hypesquad_house", self._hypesquad_house)
                 await ctx.send(f"> `-` {label}", delete_after=5)
             else:
                 await ctx.send(f"> `!` Discord returned HTTP `{resp.status_code}`.", delete_after=5)
@@ -425,6 +528,8 @@ class Status(commands.Cog):
                     json={"bio": text[:190]},
                 )
             if resp.status_code == 200:
+                self._bio_text = text[:190]
+                self._save_str("bio_text", self._bio_text)
                 msg = f"Bio updated (`{len(text[:190])}` chars)." if text else "Bio cleared."
                 await ctx.send(f"> `-` **{msg}**", delete_after=5)
             else:
@@ -440,10 +545,14 @@ class Status(commands.Cog):
             return
         if not text or text.lower() in ("off", "clear", "none"):
             await self.bot.change_presence(activities=[])
+            self._custom_status_text = ""
+            self._save_str("custom_status_text", "")
             await ctx.send("> `-` **Custom Status Cleared.**", delete_after=4)
             return
         act = discord.CustomActivity(name="Custom Status", state=text[:128])
         await self.bot.change_presence(activities=[act])
+        self._custom_status_text = text[:128]
+        self._save_str("custom_status_text", self._custom_status_text)
         await ctx.send(f"> `-` **Custom Status:** `{text[:128]}`", delete_after=5)
 
     @commands.command(name="statusrotate", aliases=["rotatestatus", "biorotate"])
@@ -598,6 +707,10 @@ class Status(commands.Cog):
         self._spoofer_running = True
         self._spoofer_cancel = False
         batch_start = time.time()
+        self._spoofer_started_at = batch_start
+        self._spoofer_total = total_games
+        self._spoofer_current = 0
+        self._spoofer_interval = interval
 
         initial_lines = [
             "> `-` **Batch Game Variety Spoofer — Starting**",
@@ -618,6 +731,10 @@ class Status(commands.Cog):
             g_id = int(g["id"])
             g_name = g.get("name", "Unknown Game")
             g_icon = g.get("icon_hash")
+            self._spoofer_current = idx
+            self._spoofer_game = g_name
+            self._spoofer_app_id = str(g_id)
+            self._spoofer_completed_total += 1
 
             act_kwargs: dict[str, Any] = {
                 "name": g_name,
@@ -708,6 +825,7 @@ class Status(commands.Cog):
             pass
 
         # IMPORTANT: Keep the completed message permanently in channel (do not delete)
+        self._save_str("spoofer_completed_total", str(self._spoofer_completed_total))
         self._spoofer_running = False
         self._spoofer_cancel = False
 

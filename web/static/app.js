@@ -8,6 +8,20 @@ let hourlyActivity = [];
 let chartMode = "activity";
 let selectedActivityKind = "globe";
 
+// Live spoofer client-side timer smoothing state
+let spooferState = {
+  running: false,
+  current: 0,
+  total: 0,
+  game: "",
+  app_id: "",
+  started_client_ms: 0,
+  elapsed_s: 0,
+  remaining_s: 0,
+  completed_total: 0,
+};
+let spooferTickTimer = 0;
+
 // ── 1. Real Chromium Liquid Glass SDF Displacement Map ────
 function makeDisplacementMap(w, h, r, bezel) {
   const cw = Math.max(40, Math.round(w));
@@ -82,10 +96,15 @@ function initLiquidGlassDock() {
 
 // ── 2. Animated Sliding Pill Indicators ───────────────────
 function moveSlider(container, slider, activeBtn) {
-  if (!container || !slider || !activeBtn) return;
+  if (!container || !slider) return;
+  if (!activeBtn) {
+    slider.classList.add("hidden-pill");
+    return;
+  }
   const left = activeBtn.offsetLeft;
   const width = activeBtn.offsetWidth;
   if (!width) return;
+  slider.classList.remove("hidden-pill");
   const padOffset = parseFloat(getComputedStyle(slider).left) || 0;
   slider.style.width = `${width}px`;
   slider.style.transform = `translateX(${left - padOffset}px)`;
@@ -98,11 +117,27 @@ function syncDockIndicator() {
   moveSlider(dock, ind, active);
 }
 
+function setSegActive(segId, attrName, value) {
+  const seg = $(segId);
+  if (!seg) return;
+  const slider = seg.querySelector(".seg-slider");
+  const buttons = Array.from(seg.querySelectorAll("button"));
+  let targetBtn = null;
+  buttons.forEach((btn) => {
+    const match = value != null && btn.dataset[attrName] === String(value);
+    btn.classList.toggle("active", match);
+    if (match) targetBtn = btn;
+  });
+  moveSlider(seg, slider, targetBtn);
+}
+
 function initAllSlidingSegs() {
   $$(".sliding-seg").forEach((seg) => {
     const slider = seg.querySelector(".seg-slider");
-    const active = seg.querySelector("button.active") || seg.querySelector("button");
-    if (active) moveSlider(seg, slider, active);
+    const active = seg.querySelector("button.active");
+    moveSlider(seg, slider, active);
+    if (seg.dataset.boundSeg) return;
+    seg.dataset.boundSeg = "1";
     seg.querySelectorAll("button").forEach((btn) => {
       btn.addEventListener("click", () => {
         seg.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
@@ -209,12 +244,12 @@ function animateViewStagger(viewEl) {
     window.anime.remove(targets);
     window.anime({
       targets,
-      translateY: [16, 0],
+      translateY: [18, 0],
       scale: [0.985, 1],
       opacity: [0, 1],
-      duration: 460,
-      easing: "cubicBezier(0.32, 1.38, 0.54, 1)",
-      delay: window.anime.stagger(45),
+      duration: 480,
+      easing: "cubicBezier(0.28, 1.32, 0.5, 1)",
+      delay: window.anime.stagger(48),
     });
   }
 }
@@ -225,7 +260,7 @@ function toast(msg) {
   el.className = "toast";
   el.textContent = msg;
   $("#toast-root").appendChild(el);
-  setTimeout(() => el.remove(), 3200);
+  setTimeout(() => el.remove(), 3400);
 }
 
 function esc(str) {
@@ -236,6 +271,13 @@ function fmtUptime(s) {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   return h ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
+}
+
+function fmtMMSS(sec) {
+  const v = Math.max(0, Math.floor(sec || 0));
+  const m = Math.floor(v / 60);
+  const s = v % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 async function api(path, opts = {}) {
@@ -253,7 +295,71 @@ async function api(path, opts = {}) {
   return data;
 }
 
-// ── 5. Interactive Smooth Bezier & Histogram Chart ────────
+// ── 5. Sidebar Drawer & Account Popover ───────────────────
+function toggleSidebar(open) {
+  const drawer = $("#sidebar-drawer");
+  const back = $("#sidebar-backdrop");
+  const btn = $("#btn-menu-open");
+  if (!drawer || !back) return;
+  if (open) {
+    back.classList.remove("hidden");
+    requestAnimationFrame(() => {
+      back.classList.add("open");
+      drawer.classList.add("open");
+    });
+    drawer.setAttribute("aria-hidden", "false");
+    btn?.setAttribute("aria-expanded", "true");
+  } else {
+    drawer.classList.remove("open");
+    back.classList.remove("open");
+    drawer.setAttribute("aria-hidden", "true");
+    btn?.setAttribute("aria-expanded", "false");
+    setTimeout(() => {
+      if (!drawer.classList.contains("open")) back.classList.add("hidden");
+    }, 280);
+  }
+}
+
+$("#btn-menu-open")?.addEventListener("click", () => toggleSidebar(true));
+$("#btn-menu-close")?.addEventListener("click", () => toggleSidebar(false));
+$("#sidebar-backdrop")?.addEventListener("click", () => toggleSidebar(false));
+
+function toggleAccountPopover(open) {
+  const pop = $("#account-popover");
+  const btn = $("#account-pill-btn");
+  if (!pop || !btn) return;
+  const shouldOpen = open !== undefined ? open : pop.classList.contains("hidden");
+  pop.classList.toggle("hidden", !shouldOpen);
+  btn.setAttribute("aria-expanded", String(shouldOpen));
+  if (shouldOpen) loadAccounts();
+}
+
+$("#account-pill-btn")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleAccountPopover();
+});
+
+document.addEventListener("click", (e) => {
+  const pop = $("#account-popover");
+  if (pop && !pop.classList.contains("hidden") && !e.target.closest(".account-wrap")) {
+    toggleAccountPopover(false);
+  }
+});
+
+$("#btn-pop-show-add")?.addEventListener("click", () => {
+  $("#pop-add-form")?.classList.remove("hidden");
+  $("#pop-add-token")?.focus();
+});
+$("#btn-pop-cancel-acct")?.addEventListener("click", () => {
+  $("#pop-add-form")?.classList.add("hidden");
+  if ($("#pop-add-token")) $("#pop-add-token").value = "";
+});
+$("#btn-pop-settings")?.addEventListener("click", () => {
+  toggleAccountPopover(false);
+  switchView("settings");
+});
+
+// ── 6. Interactive Smooth Bezier & Histogram Chart ────────
 let chartPoints = [];
 
 function catmullRomPath(pts) {
@@ -379,7 +485,7 @@ function initChartHover() {
   });
 }
 
-// ── 6. Auth Orbital Wireframe Canvas ──────────────────────
+// ── 7. Auth Orbital Wireframe Canvas ──────────────────────
 function initOrbitalCanvas() {
   const canvas = $("#globe-canvas");
   if (!canvas || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
@@ -403,8 +509,8 @@ function initOrbitalCanvas() {
     const cx = w * 0.54;
     const cy = h * 0.34;
     const r = Math.min(w, h) * 0.25;
-    ctx.strokeStyle = "rgba(200, 255, 76, 0.16)";
-    ctx.lineWidth = 1.1;
+    ctx.strokeStyle = "rgba(212, 168, 83, 0.18)";
+    ctx.lineWidth = 1.15;
 
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -424,13 +530,13 @@ function initOrbitalCanvas() {
       ctx.ellipse(cx, y, half, half * 0.16, 0, 0, Math.PI * 2);
       ctx.stroke();
     }
-    rot += 0.003;
+    rot += 0.0028;
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 }
 
-// ── 7. Auth Boot ──────────────────────────────────────────
+// ── 8. Auth Boot ──────────────────────────────────────────
 async function bootWorkspace() {
   $("#auth-gate").classList.add("hidden");
   $("#workspace").classList.remove("hidden");
@@ -495,7 +601,51 @@ $("#btn-logout")?.addEventListener("click", async () => {
   location.reload();
 });
 
-// ── 8. WebSocket Push Hub ─────────────────────────────────
+// ── 9. Spoofer Live Telemetry Renderer ────────────────────
+function renderSpooferTelemetry() {
+  const s = spooferState;
+  const wrap = $("#spoofer-bar-wrap");
+  const statusChip = $("#spoofer-status");
+  if (!statusChip) return;
+
+  $("#spoof-stat-total").textContent = `${s.completed_total || 0} titles`;
+  const ovTotal = $("#ov-spoof-total");
+  if (ovTotal) ovTotal.textContent = `${s.completed_total || 0}`;
+
+  if (s.running) {
+    wrap?.classList.remove("hidden");
+    const elapsedLive = s.started_client_ms
+      ? Math.max(s.elapsed_s, Math.floor((Date.now() - s.started_client_ms) / 1000))
+      : s.elapsed_s;
+    const pct = Math.min(100, Math.round((s.current / Math.max(1, s.total)) * 100));
+    statusChip.textContent = `Running · ${pct}%`;
+    $("#spoofer-bar").style.width = `${pct}%`;
+    $("#spoof-stat-game").textContent = s.app_id ? `${s.game} (${s.app_id})` : (s.game || "Syncing...");
+    $("#spoof-stat-progress").textContent = `${s.current} / ${s.total} (${pct}%)`;
+    $("#spoof-stat-time").textContent = `${fmtMMSS(elapsedLive)} / ${fmtMMSS(s.remaining_s)}`;
+  } else {
+    statusChip.textContent = s.completed_total > 0 ? "Standby · Ready" : "Standby";
+    $("#spoof-stat-game").textContent = "—";
+    $("#spoof-stat-progress").textContent = "0 / 0 (0%)";
+    $("#spoof-stat-time").textContent = "00:00 / 00:00";
+    wrap?.classList.add("hidden");
+  }
+}
+
+function startSpooferTicker() {
+  if (spooferTickTimer) return;
+  spooferTickTimer = setInterval(() => {
+    if (!spooferState.running) {
+      clearInterval(spooferTickTimer);
+      spooferTickTimer = 0;
+      return;
+    }
+    if (spooferState.remaining_s > 0) spooferState.remaining_s -= 1;
+    renderSpooferTelemetry();
+  }, 1000);
+}
+
+// ── 10. WebSocket Push Hub ────────────────────────────────
 function connectWS() {
   if (WS && WS.readyState <= 1) return;
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -545,16 +695,25 @@ function updateTelemetry(t) {
 
 function handleJobProgress(d) {
   if (d.job === "spoofer") {
-    const wrap = $("#spoofer-bar-wrap");
     if (d.done) {
-      $("#spoofer-status").textContent = "Done";
+      spooferState.running = false;
+      spooferState.completed_total = d.completed_total ?? spooferState.completed_total;
       $("#spoofer-bar").style.width = "100%";
-      setTimeout(() => wrap.classList.add("hidden"), 1500);
+      $("#spoofer-status").textContent = d.cancelled ? "Cancelled" : "Done";
+      toast(d.error ? `Spoofer error: ${d.error}` : (d.cancelled ? "Game spoofer stopped" : `Spoofer finished (${fmtMMSS(d.elapsed_s)})`));
+      setTimeout(() => renderSpooferTelemetry(), 1200);
     } else {
-      wrap.classList.remove("hidden");
-      const pct = Math.round((d.current / Math.max(1, d.total)) * 100);
-      $("#spoofer-bar").style.width = `${pct}%`;
-      $("#spoofer-status").textContent = `[${d.current}/${d.total}] ${d.game}`;
+      spooferState.running = true;
+      spooferState.current = d.current;
+      spooferState.total = d.total;
+      spooferState.game = d.game;
+      spooferState.app_id = d.app_id || "";
+      spooferState.elapsed_s = d.elapsed_s || 0;
+      spooferState.remaining_s = d.remaining_s || 0;
+      spooferState.completed_total = d.completed_total ?? spooferState.completed_total;
+      spooferState.started_client_ms = Date.now() - (spooferState.elapsed_s * 1000);
+      renderSpooferTelemetry();
+      startSpooferTicker();
     }
   } else if (d.job === "deletedm") {
     toast(d.done ? `DM cleanup done (${d.deleted})` : `Deleted ${d.deleted}...`);
@@ -565,65 +724,142 @@ function handleJobProgress(d) {
 }
 
 function applyToggles(toggles) {
-  $$("#switchboard .m3-switch").forEach((btn) => {
+  $$(".m3-switch[data-toggle]").forEach((btn) => {
     btn.setAttribute("aria-pressed", String(Boolean(toggles[btn.dataset.toggle])));
   });
   if (toggles.vanity_target) $("#vanity-badge").textContent = `Watching: ${toggles.vanity_target}`;
 }
 
-// ── 9. Navigation via Single Liquid Glass Dock ────────────
+// ── 11. Config Hydration (Online Mode, RPC, Spoofer, Profile) ──
+function hydratePresenceConfig(pc, sp) {
+  const mode = pc?.online_status || "online";
+  const kind = pc?.activity_kind || "globe";
+  const house = pc?.hypesquad_house || "leave";
+
+  setSegActive("#status-mode-seg", "statusMode", mode);
+  $("#presence-live-badge").textContent = mode.toUpperCase();
+
+  selectedActivityKind = kind === "clear" ? "globe" : kind;
+  setSegActive("#activity-kind-seg", "actKind", kind === "clear" ? null : kind);
+  $("#rpc-live-badge").textContent = kind === "clear"
+    ? "Cleared"
+    : (pc?.activity_title && kind !== "globe" ? `${kind}: ${pc.activity_title}` : kind.toUpperCase());
+
+  if ($("#ov-presence-summary")) {
+    const rpcLabel = kind === "clear" ? "No RPC" : (kind === "globe" ? "Globe RPC" : `${kind}: ${pc.activity_title || "—"}`);
+    $("#ov-presence-summary").textContent = `${mode} · ${rpcLabel}`;
+  }
+
+  setSegActive("#hypesquad-seg", "house", house);
+  if ($("#act-title")) $("#act-title").value = (kind !== "globe" && kind !== "clear") ? (pc?.activity_title || "") : "";
+  if ($("#act-extra")) $("#act-extra").value = pc?.activity_extra || "";
+  if ($("#cs-input")) $("#cs-input").value = pc?.custom_status_text || "";
+  if ($("#bio-input") && pc?.bio_text) $("#bio-input").value = pc.bio_text;
+  if ($("#rotate-interval") && pc?.rotate_interval) $("#rotate-interval").value = pc.rotate_interval;
+  if ($("#rotate-slides") && Array.isArray(pc?.rotate_slides)) $("#rotate-slides").value = pc.rotate_slides.join("\n");
+
+  if (sp) {
+    spooferState = {
+      running: Boolean(sp.running),
+      current: sp.current || 0,
+      total: sp.total || 0,
+      game: sp.game || "",
+      app_id: sp.app_id || "",
+      elapsed_s: sp.elapsed_s || 0,
+      remaining_s: sp.running ? Math.max(0, Math.round((sp.total - sp.current) * (sp.interval || 6))) : 0,
+      completed_total: sp.completed_total || 0,
+      started_client_ms: sp.running ? Date.now() - ((sp.elapsed_s || 0) * 1000) : 0,
+    };
+    renderSpooferTelemetry();
+    if (spooferState.running) startSpooferTicker();
+  }
+}
+
+// ── 12. Navigation: 4-Button Dock + Slide-Out Sidebar ─────
 const VIEW_TITLES = {
   overview: "Overview",
-  presence: "Presence",
-  intel: "Intel",
+  presence: "Presence & Games",
+  intel: "Intel & User Lookup",
   servers: "Servers & Voice",
   dms: "DMs & Rules",
-  system: "System",
+  settings: "Settings & Accounts",
 };
 
-function switchView(name) {
+function switchView(name, focusSelector = null) {
+  toggleSidebar(false);
   $$(".dock-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+  $$(".sidebar-link").forEach((b) => b.classList.toggle("active", b.dataset.view === name && !b.dataset.focus));
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
   $("#view-title").textContent = VIEW_TITLES[name] || name;
   syncDockIndicator();
+
   const target = $(`#view-${name}`);
   animateViewStagger(target);
-  requestAnimationFrame(initAllSlidingSegs);
+  requestAnimationFrame(() => {
+    initAllSlidingSegs();
+    syncDockIndicator();
+  });
+
   if (name === "intel") loadIntel();
   if (name === "servers") loadGuilds();
   if (name === "dms") loadDMs();
-  if (name === "system") loadSchedules();
+  if (name === "settings") {
+    loadAccounts();
+    loadSchedules();
+  }
+  if (focusSelector) {
+    setTimeout(() => {
+      const el = $(focusSelector);
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      el?.focus?.();
+    }, 240);
+  }
 }
 
 $$(".dock-item").forEach((b) => b.addEventListener("click", () => switchView(b.dataset.view)));
+$$(".sidebar-link").forEach((b) => b.addEventListener("click", () => switchView(b.dataset.view, b.dataset.focus || null)));
+
 window.addEventListener("resize", () => {
   syncDockIndicator();
   initAllSlidingSegs();
 });
 
-// ── 10. Overview & Chart Mode Switch ──────────────────────
+// ── 13. Overview, Analytics & Switches ────────────────────
 async function loadOverview() {
   const [data, an] = await Promise.all([
     api("/api/v1/overview"),
     api("/api/v1/analytics").catch(() => ({ hourly: [], stats: {} })),
   ]);
-  $("#acct-name").textContent = data.account.global_name || data.account.username;
-  if (data.account.avatar) $("#acct-avatar").src = data.account.avatar;
+
+  const dispName = data.account.global_name || data.account.username;
+  $("#acct-name").textContent = dispName;
+  $("#pop-global").textContent = dispName;
+  $("#pop-username").textContent = `@${data.account.username}`;
+  if (data.account.avatar) {
+    $("#acct-avatar").src = data.account.avatar;
+    $("#pop-avatar").src = data.account.avatar;
+  }
+  if ($("#settings-token-masked")) $("#settings-token-masked").textContent = data.account.token_masked;
+
   $("#prefix-input").value = data.account.prefix;
+  if ($("#ov-prefix-badge")) $("#ov-prefix-badge").textContent = data.account.prefix;
+  if ($("#afk-reason-input")) $("#afk-reason-input").value = data.toggles.afk_reason || "";
+
+  if ($("#sidebar-cogs")) {
+    $("#sidebar-cogs").innerHTML = (data.runtime.modules || [])
+      .map((m) => `<span class="mini-tag">${esc(m)}</span>`)
+      .join("");
+  }
+
   const todayMsgs = an.stats?.global_today ?? 0;
   $("#m-db").textContent = `${todayMsgs} / ${data.runtime.db_size_kb} KB`;
   hourlyActivity = an.hourly || [];
   const totalHourly = hourlyActivity.reduce((acc, x) => acc + (Number(x.count) || 0), 0);
   if (totalHourly === 0 && chartMode === "activity") {
     chartMode = "ping";
-    const seg = $("#chart-mode-seg");
-    const pingBtn = seg?.querySelector('[data-chart-mode="ping"]');
-    if (pingBtn) {
-      seg.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
-      pingBtn.classList.add("active");
-      moveSlider(seg, seg.querySelector(".seg-slider"), pingBtn);
-    }
+    setSegActive("#chart-mode-seg", "chartMode", "ping");
   }
+
   updateTelemetry({
     latency_ms: data.runtime.latency_ms,
     uptime_s: data.runtime.uptime_s,
@@ -632,6 +868,8 @@ async function loadOverview() {
   });
   drawMainChart();
   applyToggles(data.toggles);
+  hydratePresenceConfig(data.presence_config, data.spoofer);
+
   $("#log-stream").innerHTML = "";
   (data.logs || []).forEach(appendLogLine);
 }
@@ -643,7 +881,7 @@ $$("#chart-mode-seg button").forEach((b) => {
   });
 });
 
-$$("#switchboard .m3-switch").forEach((btn) => {
+$$(".m3-switch[data-toggle]").forEach((btn) => {
   btn.addEventListener("click", async () => {
     const key = btn.dataset.toggle;
     const next = btn.getAttribute("aria-pressed") !== "true";
@@ -661,13 +899,130 @@ $("#btn-save-prefix")?.addEventListener("click", async () => {
   const val = $("#prefix-input").value.trim();
   if (!val) return;
   await api("/api/v1/toggles", { method: "POST", body: { key: "prefix", value: val } });
+  if ($("#ov-prefix-badge")) $("#ov-prefix-badge").textContent = val;
   toast(`Prefix saved: ${val}`);
 });
 
-// ── 11. Presence Studio ───────────────────────────────────
+$("#btn-save-afk-reason")?.addEventListener("click", async () => {
+  const reason = $("#afk-reason-input").value.trim();
+  const isAfk = $("#switchboard [data-toggle='afk']")?.getAttribute("aria-pressed") === "true";
+  const res = await api("/api/v1/toggles", { method: "POST", body: { key: "afk", value: isAfk, reason } });
+  applyToggles(res.toggles);
+  toast("AFK message updated");
+});
+
+// ── 14. Multi-Account Switcher & Settings Token Control ───
+async function loadAccounts() {
+  try {
+    const res = await api("/api/v1/accounts");
+    const accounts = res.accounts || [];
+
+    const popList = $("#pop-accounts-list");
+    if (popList) {
+      popList.innerHTML = accounts.length
+        ? accounts.map((a) => `
+          <div class="pop-acct-row">
+            <div class="pop-acct-info">
+              <img class="avatar" src="${esc(a.avatar || "")}" alt="" />
+              <div style="min-width:0;">
+                <div class="pop-acct-name">${esc(a.global_name || a.username)}</div>
+                <div class="muted mono" style="font-size:0.7rem;">${esc(a.masked)}</div>
+              </div>
+            </div>
+            ${a.active
+              ? `<span class="gold-chip mono">Active</span>`
+              : `<button type="button" class="btn-expressive sm" data-switch-acct="${esc(a.id)}">Switch</button>`}
+          </div>`).join("")
+        : `<div class="muted">Active session stored. Add another token below.</div>`;
+    }
+
+    const setList = $("#settings-accounts-list");
+    if (setList) {
+      setList.innerHTML = accounts.length
+        ? accounts.map((a) => `
+          <div class="data-row">
+            <div class="pop-acct-info">
+              <img class="avatar" src="${esc(a.avatar || "")}" alt="" />
+              <div class="data-main">
+                <div class="data-title">${esc(a.global_name || a.username)} <span class="muted mono">@${esc(a.username)}</span></div>
+                <div class="muted mono">${esc(a.masked)} · ID ${esc(a.id)}</div>
+              </div>
+            </div>
+            <div class="inline-actions">
+              ${a.active
+                ? `<span class="gold-chip mono">Active</span>`
+                : `<button type="button" class="btn-expressive sm" data-switch-acct="${esc(a.id)}">Switch</button>
+                   <button type="button" class="btn-danger-tonal sm" data-rm-acct="${esc(a.id)}">Remove</button>`}
+            </div>
+          </div>`).join("")
+        : `<div class="muted">No saved accounts yet.</div>`;
+    }
+
+    $$("[data-switch-acct]").forEach((btn) => btn.addEventListener("click", async () => {
+      const aid = btn.dataset.switchAcct;
+      if (!confirm("Switch active bot session to this account and restart Globe?")) return;
+      try {
+        await api("/api/v1/accounts/switch", { method: "POST", body: { account_id: aid } });
+        toast("Switching account — restarting Globe...");
+        setTimeout(() => location.reload(), 3200);
+      } catch (err) {
+        toast(err.message);
+      }
+    }));
+
+    $$("[data-rm-acct]").forEach((btn) => btn.addEventListener("click", async () => {
+      try {
+        await api(`/api/v1/accounts/${btn.dataset.rmAcct}`, { method: "DELETE" });
+        toast("Account removed from vault");
+        loadAccounts();
+      } catch (err) {
+        toast(err.message);
+      }
+    }));
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+async function addAccountToken(rawToken, inputEl, afterCb) {
+  const tok = rawToken.trim();
+  if (!tok) return toast("Paste a Discord token");
+  try {
+    await api("/api/v1/accounts", { method: "POST", body: { token: tok } });
+    if (inputEl) inputEl.value = "";
+    toast("Account verified and added to vault");
+    await loadAccounts();
+    if (afterCb) afterCb();
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+$("#btn-pop-save-acct")?.addEventListener("click", () => {
+  addAccountToken($("#pop-add-token").value, $("#pop-add-token"), () => $("#pop-add-form")?.classList.add("hidden"));
+});
+$("#btn-settings-add-acct")?.addEventListener("click", () => {
+  addAccountToken($("#settings-add-token").value, $("#settings-add-token"));
+});
+$("#btn-settings-token-save")?.addEventListener("click", async () => {
+  const tok = $("#settings-active-token").value.trim();
+  if (!tok) return toast("Paste a replacement Discord token");
+  if (!confirm("Replace active Discord token and restart Globe onto the new session?")) return;
+  try {
+    const res = await api("/api/v1/settings/token", { method: "POST", body: { token: tok } });
+    toast(`Token updated (${res.username}) — restarting...`);
+    $("#settings-active-token").value = "";
+    setTimeout(() => location.reload(), 3500);
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+// ── 15. Presence Studio & Spoofer ─────────────────────────
 $$("#status-mode-seg button").forEach((b) => {
   b.addEventListener("click", async () => {
     await api("/api/v1/presence/status", { method: "POST", body: { status: b.dataset.statusMode } });
+    $("#presence-live-badge").textContent = b.dataset.statusMode.toUpperCase();
     toast(`Status: ${b.dataset.statusMode}`);
   });
 });
@@ -685,11 +1040,14 @@ $("#btn-act-apply")?.addEventListener("click", async () => {
   if (selectedActivityKind === "globe") body.elapsed = extra;
   else if (selectedActivityKind === "streaming") body.url = extra;
   await api("/api/v1/presence/activity", { method: "POST", body });
+  $("#rpc-live-badge").textContent = selectedActivityKind === "globe" ? "GLOBE" : `${selectedActivityKind}: ${title}`;
   toast(`Activity updated (${selectedActivityKind})`);
 });
 
 $("#btn-act-clear")?.addEventListener("click", async () => {
   await api("/api/v1/presence/activity", { method: "POST", body: { kind: "clear" } });
+  setSegActive("#activity-kind-seg", "actKind", null);
+  $("#rpc-live-badge").textContent = "Cleared";
   toast("Activity cleared");
 });
 
@@ -725,11 +1083,21 @@ $("#btn-rotate-stop")?.addEventListener("click", async () => {
 });
 
 $("#btn-spoof-start")?.addEventListener("click", async () => {
+  const count = Number($("#spoof-count").value);
+  const interval = Number($("#spoof-interval").value);
   await api("/api/v1/presence/spoofer", {
     method: "POST",
-    body: { action: "start", count: Number($("#spoof-count").value), interval: Number($("#spoof-interval").value) },
+    body: { action: "start", count, interval },
   });
-  toast("Spoofer started");
+  spooferState.running = true;
+  spooferState.total = count;
+  spooferState.current = 0;
+  spooferState.game = "Fetching Discord catalog...";
+  spooferState.started_client_ms = Date.now();
+  spooferState.remaining_s = Math.round(count * interval);
+  renderSpooferTelemetry();
+  startSpooferTicker();
+  toast("Game badge spoofer started");
 });
 
 $("#btn-spoof-stop")?.addEventListener("click", async () => {
@@ -737,11 +1105,11 @@ $("#btn-spoof-stop")?.addEventListener("click", async () => {
   toast("Stopping spoofer");
 });
 
-// ── 12. Intel, Detailed User Dossier, OSINT, Encoder & Vanity ──
+// ── 16. Intel, User Dossier, OSINT, Encoder & Vanity ──────
 function renderUserDossier(res) {
   $("#dossier-status-chip").textContent = res.status.toUpperCase();
   const badgesHtml = res.badges?.length
-    ? res.badges.map((b) => `<span class="mini-tag volt">${esc(b)}</span>`).join("")
+    ? res.badges.map((b) => `<span class="mini-tag gold">${esc(b)}</span>`).join("")
     : `<span class="mini-tag">Standard Account</span>`;
   const connHtml = res.connected_accounts?.length
     ? `<div class="role-chip-row">${res.connected_accounts.map((c) => `<span class="mini-tag">${esc(c.type)}: ${esc(c.name)}</span>`).join("")}</div>`
@@ -786,7 +1154,7 @@ function renderUserDossier(res) {
           <span class="mono">${esc(res.status)}</span>
         </div>
         ${actHtml}
-        ${res.voice ? `<div class="mini-tag volt">VC: ${esc(res.voice)}</div>` : ""}
+        ${res.voice ? `<div class="mini-tag gold">VC: ${esc(res.voice)}</div>` : ""}
         <div class="divider"></div>
         <div class="data-list" style="max-height:240px;">
           ${mutualHtml}
@@ -913,7 +1281,7 @@ $("#btn-friends-diff")?.addEventListener("click", async () => {
   $("#friends-diff-out").innerHTML = rem || add ? rem + add : `<div class="muted">No changes since snapshot (${r.current_count} friends).</div>`;
 });
 
-// ── 13. Servers, Voice & Channel Cleanup ──────────────────
+// ── 17. Servers, Voice & Channel Cleanup ──────────────────
 async function loadGuilds() {
   const data = await api("/api/v1/guilds");
   $("#guilds-list").innerHTML = data.guilds.map((g) => `
@@ -925,9 +1293,9 @@ async function loadGuilds() {
         </div>
         <div class="inline-actions">
           <button class="btn-ghost-sm" data-toggle-chs="${esc(g.id)}">Channels (${(g.voice_channels?.length || 0) + (g.text_channels?.length || 0)})</button>
-          <button class="btn-tonal" data-audit="${esc(g.id)}">Audit</button>
+          <button class="btn-tonal sm" data-audit="${esc(g.id)}">Audit</button>
           <a class="m3-pill-btn" href="/api/v1/guilds/${esc(g.id)}/backup" style="text-decoration:none;">Backup</a>
-          <button class="${g.locked ? "btn-expressive" : "btn-danger-tonal"}" data-lock="${esc(g.id)}" data-state="${g.locked ? "unlock" : "lock"}">${g.locked ? "Unlock" : "Lockdown"}</button>
+          <button class="${g.locked ? "btn-expressive sm" : "btn-danger-tonal sm"}" data-lock="${esc(g.id)}" data-state="${g.locked ? "unlock" : "lock"}">${g.locked ? "Unlock" : "Lockdown"}</button>
         </div>
       </div>
       <div id="chs-${esc(g.id)}" class="guild-channels hidden">
@@ -1005,7 +1373,7 @@ $("#btn-treact-set")?.addEventListener("click", async () => {
   toast("Auto-react target updated");
 });
 
-// ── 14. DMs, Automation Rules, Webhook & Bookmarks ────────
+// ── 18. DMs, Automation Rules, Webhook & Bookmarks ────────
 async function loadDMs() {
   const [dmRes, bmRes, autoRes] = await Promise.all([
     api("/api/v1/dms"),
@@ -1023,7 +1391,7 @@ async function loadDMs() {
       <div class="inline-actions">
         <button class="btn-ghost-sm" data-use-dm="${esc(d.id)}">Use</button>
         <a class="m3-pill-btn" href="/api/v1/dms/${esc(d.id)}/export" style="text-decoration:none;">Export</a>
-        <button class="btn-danger-tonal" data-wipedm="${esc(d.id)}" data-name="${esc(d.recipient)}">Wipe</button>
+        <button class="btn-danger-tonal sm" data-wipedm="${esc(d.id)}" data-name="${esc(d.recipient)}">Wipe</button>
       </div>
     </div>`).join("")
     : `<div class="muted">No open DM channels cached.</div>`;
@@ -1112,14 +1480,14 @@ $("#btn-clear-outgoing")?.addEventListener("click", async () => {
   toast(`Cleared ${r.processed}`);
 });
 
-// ── 15. System & Schedules ────────────────────────────────
+// ── 19. Settings: System & Schedules ──────────────────────
 async function loadSchedules() {
   const r = await api("/api/v1/schedules");
   $("#schedules-list").innerHTML = r.schedules.length
     ? r.schedules.map((s) => `
       <div class="data-row">
         <div class="data-main"><div class="data-title">#${s.id} · every ${esc(s.interval)}</div><div class="muted">${esc(s.channel)}: ${esc(s.text)}</div></div>
-        <button class="btn-danger-tonal" data-delsch="${s.id}">Cancel</button>
+        <button class="btn-danger-tonal sm" data-delsch="${s.id}">Cancel</button>
       </div>`).join("")
     : `<div class="muted">No active schedules.</div>`;
   $$("[data-delsch]").forEach((b) => b.addEventListener("click", async () => {

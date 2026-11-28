@@ -6,6 +6,7 @@ Run with: python main.py
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -124,10 +125,14 @@ async def _run(token: str) -> None:
     bot = GlobeBot()
     dashboard = None
 
+    # Clear stale env override before restart loops if .env holds switched token
+    if token:
+        os.environ["DISCORD_TOKEN"] = token
+
     if settings.dashboard_enabled:
         try:
             from web.server import DashboardServer
-            dashboard = DashboardServer(bot=bot, token_provider=lambda: token)
+            dashboard = DashboardServer(bot=bot, token_provider=lambda: auth.token or token)
             await dashboard.start()
         except Exception as exc:
             log_warn(f"Web Control Plane failed to start: {exc}")
