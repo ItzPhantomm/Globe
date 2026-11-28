@@ -1483,7 +1483,7 @@ async function loadGuilds() {
       </div>
       <div id="chs-${esc(g.id)}" class="guild-channels hidden">
         ${(g.voice_channels || []).map((v) => `<button type="button" class="ch-pill" data-pick-vc="${esc(v.id)}">VC: ${esc(v.name)} (${v.members})</button>`).join("")}
-        ${(g.text_channels || []).slice(0, 12).map((t) => `<button type="button" class="ch-pill" data-pick-tc="${esc(t.id)}" data-pick-gid="${esc(g.id)}" data-pick-gname="${esc(g.name)}" data-pick-cname="${esc(t.name)}">#${esc(t.name)}</button>`).join("")}
+        ${(g.text_channels || []).map((t) => `<button type="button" class="ch-pill" data-pick-tc="${esc(t.id)}" data-pick-gid="${esc(g.id)}" data-pick-gname="${esc(g.name)}" data-pick-cname="${esc(t.name)}">#${esc(t.name)}</button>`).join("")}
       </div>
     </div>`).join("") || `<div class="muted">No servers loaded.</div>`;
 

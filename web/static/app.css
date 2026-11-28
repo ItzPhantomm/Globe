@@ -529,10 +529,12 @@ button.sm { padding: 0.42rem 0.85rem; font-size: var(--text-sm); }
   margin-top: 0.65rem; padding: 0.7rem 0.85rem; border-radius: 16px;
   background: rgba(8, 9, 14, 0.8); border: 1px solid var(--border);
   display: flex; flex-wrap: wrap; gap: 0.4rem;
+  max-height: 240px; overflow-y: auto;
 }
 .ch-pill {
   padding: 0.28rem 0.65rem; border-radius: 999px; font-size: 0.75rem;
   background: var(--bg-high); color: var(--text-primary); border: 1px solid var(--border);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .ch-pill:hover { border-color: var(--gold); color: var(--gold-bright); }
 

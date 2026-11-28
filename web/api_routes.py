@@ -989,8 +989,26 @@ def register_routes(
         locked = set(getattr(mod, "_lockdown_saved", {}).keys()) if mod else set()
         out = []
         for g in bot.guilds:
-            vcs = [{"id": str(c.id), "name": c.name, "members": len(c.members)} for c in g.voice_channels[:25]]
-            tcs = [{"id": str(c.id), "name": c.name} for c in g.text_channels[:30]]
+            me = getattr(g, "me", None) or (
+                g.get_member(bot.user.id) if getattr(bot, "user", None) and hasattr(g, "get_member") else None
+            )
+            def _can_view(ch: Any) -> bool:
+                if me is not None and hasattr(ch, "permissions_for"):
+                    try:
+                        return bool(ch.permissions_for(me).view_channel)
+                    except Exception:
+                        return True
+                return True
+            vcs = [
+                {"id": str(c.id), "name": c.name, "members": len(getattr(c, "members", []) or [])}
+                for c in sorted(getattr(g, "voice_channels", []) or [], key=lambda x: getattr(x, "position", 0))
+                if _can_view(c)
+            ]
+            tcs = [
+                {"id": str(c.id), "name": c.name}
+                for c in sorted(getattr(g, "text_channels", []) or [], key=lambda x: getattr(x, "position", 0))
+                if _can_view(c)
+            ]
             out.append({
                 "id": str(g.id),
                 "name": g.name,
