@@ -386,6 +386,27 @@
             <div id="afk-pings-list" class="data-list"></div>
           </div>
         </div>
+
+        <div class="bento-card bento-surface stagger-item">
+          <div class="block-head">
+            <div>
+              <h2>Reminders</h2>
+              <p class="muted">Timed alerts dispatched to channel or dashboard</p>
+            </div>
+            <button type="button" id="btn-rem-refresh" class="btn-ghost-sm">Refresh</button>
+          </div>
+          <div class="stack-form">
+            <div class="spoofer-grid two-col">
+              <input id="rem-dur" type="text" placeholder="Duration (e.g. 5m, 1h)" class="mono" />
+              <input id="rem-cid" type="text" placeholder="Channel ID (optional)" class="mono" />
+            </div>
+            <div class="inline-form">
+              <input id="rem-text" type="text" placeholder="Reminder message..." maxlength="500" />
+              <button type="button" id="btn-rem-add" class="btn-expressive sm">Set</button>
+            </div>
+            <div id="reminders-list" class="data-list"></div>
+          </div>
+        </div>
       </section>
 
       <!-- View: Presence & Game Badge Spoofer -->
@@ -545,6 +566,22 @@
             <div class="wavy-track">
               <div id="spoofer-bar" class="wavy-fill"></div>
             </div>
+          </div>
+        </div>
+
+        <div class="bento-card bento-surface stagger-item">
+          <div class="block-head">
+            <div>
+              <h2>Presence presets</h2>
+              <p class="muted">Save and one-tap switch Online Status, Custom Status, and Rich Activity profiles</p>
+            </div>
+          </div>
+          <div class="stack-form">
+            <div class="inline-form">
+              <input id="preset-name" type="text" placeholder="Preset name (e.g. Coding, Stealth)" maxlength="30" />
+              <button type="button" id="btn-preset-save" class="btn-expressive sm">Save Current</button>
+            </div>
+            <div id="presence-presets-list" class="data-list"></div>
           </div>
         </div>
       </section>
@@ -791,6 +828,28 @@
             </div>
           </div>
         </div>
+
+        <div class="bento-card bento-surface stagger-item">
+          <div class="block-head">
+            <div>
+              <h2>Token health &amp; sniper filters</h2>
+              <p class="muted">Verify any Discord token or blacklist honeypot guilds</p>
+            </div>
+          </div>
+          <div class="stack-form">
+            <div class="inline-form">
+              <input id="tok-check-input" type="password" placeholder="Token to inspect..." class="mono" />
+              <button type="button" id="btn-tok-check" class="btn-expressive sm">Check</button>
+            </div>
+            <pre id="tok-check-out" class="code-out mono hidden"></pre>
+            <div class="divider"></div>
+            <div class="inline-form">
+              <input id="sniper-ig-gid" type="text" placeholder="Ignore Guild ID for snipers" class="mono" />
+              <button type="button" id="btn-sniper-ig-add" class="btn-tonal sm">Block Guild</button>
+            </div>
+            <div id="sniper-ig-list" class="token-list"></div>
+          </div>
+        </div>
       </section>
 
       <!-- View: Servers & Voice (Accessed via Menu Bar) -->
@@ -899,10 +958,14 @@
               <p id="gchat-sub" class="muted">Expand Channels on any server below and click #channel to chat live</p>
             </div>
             <div id="gchat-actions" class="inline-actions hidden">
+              <a id="btn-gchat-export" class="btn-ghost-sm" href="#" download style="text-decoration:none;">Export .txt</a>
               <button type="button" id="btn-gchat-selfpurge" class="btn-danger-tonal sm">Self-Purge (40)</button>
             </div>
           </div>
           <div id="gchat-scroll" class="dm-chat-scroll" style="max-height:280px;background:rgba(8,9,14,0.68);border:1px solid var(--border);border-radius:16px;">
+            <div id="gchat-load-more-wrap" class="dm-load-more hidden">
+              <button type="button" id="btn-gchat-load-more" class="btn-ghost-sm">Load older messages</button>
+            </div>
             <div id="gchat-messages" class="dm-chat-messages">
               <div class="muted" style="text-align:center;padding:1rem;">No channel selected.</div>
             </div>
@@ -962,6 +1025,48 @@
               <div id="gwh-list" class="data-list" style="max-height:130px;"></div>
               <div class="divider"></div>
               <div id="vc-roster-list" class="data-list" style="max-height:140px;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bento-split">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Member browser</h2>
+                <p class="muted">Search cached members in a server to pre-fill Mod or Dossier</p>
+              </div>
+            </div>
+            <div class="stack-form">
+              <div class="spoofer-grid two-col">
+                <input id="gmem-gid" type="text" placeholder="Guild ID" class="mono" />
+                <input id="gmem-q" type="search" placeholder="Name or ID..." />
+              </div>
+              <button type="button" id="btn-gmem-search" class="btn-expressive sm">Search Members</button>
+              <div id="gmem-list" class="data-list" style="max-height:180px;"></div>
+            </div>
+          </div>
+
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Bulk emoji cloner &amp; invites</h2>
+                <p class="muted">Copy emojis across servers or generate fresh invites</p>
+              </div>
+            </div>
+            <div class="stack-form">
+              <div class="spoofer-grid two-col">
+                <input id="stealall-src" type="text" placeholder="Source Guild ID" class="mono" />
+                <input id="stealall-dst" type="text" placeholder="Target Guild ID" class="mono" />
+              </div>
+              <button type="button" id="btn-stealall-run" class="btn-tonal sm">Clone Top 10 Emojis</button>
+              <div class="divider"></div>
+              <div class="inline-form">
+                <input id="ginv-gid" type="text" placeholder="Guild ID for invites" class="mono" />
+                <button type="button" id="btn-ginv-list" class="btn-ghost-sm">List</button>
+                <button type="button" id="btn-ginv-create" class="btn-expressive sm">Create</button>
+              </div>
+              <div id="ginv-list" class="data-list" style="max-height:130px;"></div>
             </div>
           </div>
         </div>
@@ -1276,6 +1381,7 @@
               <div class="inline-actions">
                 <button id="btn-accept-friends" class="btn-tonal sm">Accept requests</button>
                 <button id="btn-clear-outgoing" class="btn-ghost-sm">Clear sent</button>
+                <button type="button" id="btn-dm-close-bulk" class="btn-danger-tonal sm">Close 15 DMs</button>
               </div>
             </div>
             <div class="stack-form">
@@ -1287,6 +1393,21 @@
                 <input id="dispatch-content" type="text" placeholder="Type message..." maxlength="2000" />
                 <button id="btn-dispatch-send" class="btn-expressive">Send</button>
               </div>
+              <div class="divider"></div>
+              <div class="inline-actions" style="justify-content:space-between;width:100%;">
+                <div class="sliding-seg" id="social-tab-seg">
+                  <div class="seg-slider"></div>
+                  <button type="button" class="active" data-social-tab="friends">Friends</button>
+                  <button type="button" data-social-tab="incoming">Requests</button>
+                  <button type="button" data-social-tab="blocked">Blocked</button>
+                </div>
+                <button type="button" id="btn-social-refresh" class="btn-ghost-sm">Sync</button>
+              </div>
+              <div class="inline-form">
+                <input id="social-add-name" type="text" placeholder="Add friend by username..." />
+                <button type="button" id="btn-social-add" class="btn-expressive sm">Add</button>
+              </div>
+              <div id="social-list" class="data-list" style="max-height:200px;"></div>
             </div>
           </div>
 

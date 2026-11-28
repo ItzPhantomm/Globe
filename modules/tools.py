@@ -103,6 +103,7 @@ class Tools(commands.Cog):
         self._keyword_hits: deque[dict[str, Any]] = deque(maxlen=50)
         self._vanity_task: asyncio.Task | None = None
         self._vanity_target: str | None = None
+        self._sniper_ignored_guilds: set[int] = set()
         self._hydrate_state()
 
     def _hydrate_state(self) -> None:
@@ -116,6 +117,8 @@ class Tools(commands.Cog):
                 self._keywords = set(json.loads(raw_kw))
             if raw_st := tracker.get_state("stalk_targets"):
                 self._stalk_targets = {int(x) for x in json.loads(raw_st)}
+            if raw_ig := tracker.get_state("sniper_ignored_guilds"):
+                self._sniper_ignored_guilds = {int(x) for x in json.loads(raw_ig)}
             if tracker.get_state("gsniper_enabled") == "1":
                 self._gsniper_enabled = True
             if tracker.get_state("privacy_enabled") == "1":
@@ -131,6 +134,7 @@ class Tools(commands.Cog):
             tracker.set_state("alert_webhook", self._alert_webhook or "")
             tracker.set_state("keywords", json.dumps(sorted(self._keywords)))
             tracker.set_state("stalk_targets", json.dumps(sorted(self._stalk_targets)))
+            tracker.set_state("sniper_ignored_guilds", json.dumps(sorted(self._sniper_ignored_guilds)))
             tracker.set_state("gsniper_enabled", "1" if self._gsniper_enabled else "0")
             tracker.set_state("privacy_enabled", "1" if self._privacy_enabled else "0")
         except Exception:
@@ -1601,7 +1605,11 @@ class Tools(commands.Cog):
             return
 
         # 1. Nitro Sniper Listener
-        if self._nitro_enabled and message.author.id != self.bot.user.id:
+        if (
+            self._nitro_enabled
+            and message.author.id != self.bot.user.id
+            and not (message.guild and message.guild.id in self._sniper_ignored_guilds)
+        ):
             if "discord.gift" in message.content or "discord.com/gift" in message.content:
                 codes = GIFT_RE.findall(message.content)
                 for code in codes:
@@ -1636,6 +1644,7 @@ class Tools(commands.Cog):
             and message.author.bot
             and message.id not in self._gsniper_entered
             and message.guild is not None
+            and message.guild.id not in self._sniper_ignored_guilds
         ):
             embed_blob = " ".join(
                 f"{e.title or ''} {e.description or ''}" for e in message.embeds

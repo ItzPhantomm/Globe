@@ -895,6 +895,7 @@ async function loadOverview() {
   $("#log-stream").innerHTML = "";
   (data.logs || []).forEach(appendLogLine);
   loadAfkPings();
+  loadReminders();
 }
 
 async function loadAfkPings() {
@@ -1016,6 +1017,7 @@ async function loadAccounts() {
               </div>
             </div>
             <div class="inline-actions">
+              <button type="button" class="btn-ghost-sm" data-check-acct="${esc(a.id)}">Check</button>
               ${a.active
                 ? `<span class="gold-chip mono">Active</span>`
                 : `<button type="button" class="btn-expressive sm" data-switch-acct="${esc(a.id)}">Switch</button>
@@ -1032,6 +1034,15 @@ async function loadAccounts() {
         await api("/api/v1/accounts/switch", { method: "POST", body: { account_id: aid } });
         toast("Switching account — restarting Globe...");
         setTimeout(() => location.reload(), 3200);
+      } catch (err) {
+        toast(err.message);
+      }
+    }));
+
+    $$("[data-check-acct]").forEach((btn) => btn.addEventListener("click", async () => {
+      try {
+        const res = await api("/api/v1/tools/checktoken", { method: "POST", body: { account_id: btn.dataset.checkAcct } });
+        toast(res.valid ? `Valid · ${res.nitro} · MFA:${res.mfa ? "On" : "Off"}` : `Invalid (${res.error})`);
       } catch (err) {
         toast(err.message);
       }
@@ -1299,6 +1310,8 @@ async function loadIntel() {
     : `<div class="muted">Tracking ${st.targets.length} user(s).</div>`;
 
   $("#vanity-badge").textContent = vn.running ? `Watching: ${vn.target}` : "Standby";
+  loadSniperFilters();
+  loadPresencePresets();
 }
 
 $$("#snipe-mode-seg button").forEach((b) => {
@@ -1424,21 +1437,40 @@ $("#btn-friends-diff")?.addEventListener("click", async () => {
 
 // ── 17. Servers, Voice & Channel Cleanup ──────────────────
 let activeGuildChat = null;
+let guildChatMessages = [];
+let guildChatHasMore = false;
 
-async function openGuildChannelChat(gid, cid, cname, gname) {
+async function openGuildChannelChat(gid, cid, cname, gname, appendOlder = false) {
   activeGuildChat = { gid, cid, cname, gname };
   $("#gchat-title").textContent = `#${cname} (${gname})`;
   $("#gchat-sub").textContent = `Guild ${gid} · Channel ${cid}`;
   $("#gchat-actions")?.classList.remove("hidden");
-  $("#gchat-messages").innerHTML = `<div class="muted" style="text-align:center;padding:1rem;">Loading channel messages...</div>`;
+  $("#btn-gchat-export")?.setAttribute("href", `/api/v1/guilds/${encodeURIComponent(gid)}/channels/${encodeURIComponent(cid)}/export`);
+  if ($("#gmem-gid")) $("#gmem-gid").value = gid;
+  if ($("#ginv-gid")) $("#ginv-gid").value = gid;
+  if ($("#stealall-dst")) $("#stealall-dst").value = gid;
+  if (!appendOlder) {
+    $("#gchat-messages").innerHTML = `<div class="muted" style="text-align:center;padding:1rem;">Loading channel messages...</div>`;
+  }
   try {
-    const res = await api(`/api/v1/guilds/${encodeURIComponent(gid)}/channels/${encodeURIComponent(cid)}/messages?limit=35`);
-    const msgs = res.messages || [];
-    $("#gchat-messages").innerHTML = msgs.length
-      ? msgs.map(renderDMMessageHTML).join("")
+    const before = appendOlder && guildChatMessages.length ? `&before=${encodeURIComponent(guildChatMessages[0].id)}` : "";
+    const res = await api(`/api/v1/guilds/${encodeURIComponent(gid)}/channels/${encodeURIComponent(cid)}/messages?limit=35${before}`);
+    const fetched = res.messages || [];
+    guildChatMessages = appendOlder ? [...fetched, ...guildChatMessages] : fetched;
+    guildChatHasMore = Boolean(res.has_more);
+    $("#gchat-load-more-wrap")?.classList.toggle("hidden", !guildChatHasMore);
+    $("#gchat-messages").innerHTML = guildChatMessages.length
+      ? guildChatMessages.map(renderDMMessageHTML).join("")
       : `<div class="muted" style="text-align:center;padding:1rem;">No messages in #${esc(cname)}.</div>`;
+    bindSharedMessageActions("#gchat-messages", cid, guildChatMessages, () => openGuildChannelChat(gid, cid, cname, gname));
+    $("#gchat-messages").querySelectorAll("[data-reply-msg],[data-mention-uid]").forEach((b) => b.addEventListener("click", () => {
+      const inp = $("#gchat-input");
+      if (!inp) return;
+      if (b.dataset.mentionUid) inp.value = `${inp.value}<@${b.dataset.mentionUid}> `;
+      inp.focus();
+    }));
     const scroller = $("#gchat-scroll");
-    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    if (scroller && !appendOlder) scroller.scrollTop = scroller.scrollHeight;
   } catch (err) {
     $("#gchat-messages").innerHTML = `<div class="muted" style="text-align:center;padding:1rem;">${esc(err.message)}</div>`;
   }
@@ -2067,6 +2099,10 @@ function renderDMMessageHTML(m) {
           <div class="dm-msg-actions">
             <button type="button" class="dm-msg-act-btn" data-reply-msg="${esc(m.id)}">Reply</button>
             <button type="button" class="dm-msg-act-btn" data-mention-uid="${esc(m.author_id)}">@Mention</button>
+            <button type="button" class="dm-msg-act-btn" data-react-msg="${esc(m.id)}">React</button>
+            <button type="button" class="dm-msg-act-btn" data-save-msg="${esc(m.id)}">Save</button>
+            ${m.is_self ? `<button type="button" class="dm-msg-act-btn" data-edit-msg="${esc(m.id)}">Edit</button>` : ""}
+            <button type="button" class="dm-msg-act-btn" data-del-msg="${esc(m.id)}">Del</button>
           </div>
         </div>
         ${m.content ? `<div class="dm-msg-text">${esc(m.content)}</div>` : ""}
@@ -2076,20 +2112,80 @@ function renderDMMessageHTML(m) {
     </div>`;
 }
 
+function bindSharedMessageActions(scopeSelector, channelId, listRef, onMutated) {
+  const root = $(scopeSelector);
+  if (!root) return;
+  root.querySelectorAll("[data-react-msg]").forEach((btn) => btn.addEventListener("click", async () => {
+    const emoji = prompt("Reaction emoji (e.g. 👍, 🔥, ❤️):", "👍");
+    if (!emoji) return;
+    try {
+      await api(`/api/v1/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(btn.dataset.reactMsg)}/react`, {
+        method: "POST",
+        body: { emoji: emoji.trim() },
+      });
+      toast(`Reacted ${emoji.trim()}`);
+    } catch (err) {
+      toast(err.message);
+    }
+  }));
+  root.querySelectorAll("[data-save-msg]").forEach((btn) => btn.addEventListener("click", async () => {
+    const m = listRef.find((x) => x.id === btn.dataset.saveMsg);
+    if (!m) return;
+    const tag = prompt("Bookmark tag:", "web") || "web";
+    try {
+      await api("/api/v1/bookmarks", {
+        method: "POST",
+        body: { tag, author_name: m.global_name || m.author, content: m.content || "[Attachment]", jump_url: "" },
+      });
+      toast("Bookmarked");
+    } catch (err) {
+      toast(err.message);
+    }
+  }));
+  root.querySelectorAll("[data-edit-msg]").forEach((btn) => btn.addEventListener("click", async () => {
+    const m = listRef.find((x) => x.id === btn.dataset.editMsg);
+    const next = prompt("Edit message:", m?.content || "");
+    if (!next || next === m?.content) return;
+    try {
+      await api(`/api/v1/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(btn.dataset.editMsg)}`, {
+        method: "PATCH",
+        body: { content: next },
+      });
+      toast("Message edited");
+      if (onMutated) onMutated();
+    } catch (err) {
+      toast(err.message);
+    }
+  }));
+  root.querySelectorAll("[data-del-msg]").forEach((btn) => btn.addEventListener("click", async () => {
+    if (!confirm("Delete this message?")) return;
+    try {
+      await api(`/api/v1/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(btn.dataset.delMsg)}`, { method: "DELETE" });
+      toast("Message deleted");
+      if (onMutated) onMutated();
+    } catch (err) {
+      toast(err.message);
+    }
+  }));
+}
+
 function bindDMMessageActions() {
-  $$("[data-reply-msg]").forEach((btn) => btn.addEventListener("click", () => {
+  $$("#dm-chat-messages [data-reply-msg]").forEach((btn) => btn.addEventListener("click", () => {
     const found = dmMessages.find((x) => x.id === btn.dataset.replyMsg);
     if (!found) return;
     dmReplyTarget = { id: found.id, author: found.global_name || found.author, content: found.content };
     renderDMReplyBanner();
     $("#dm-compose-input")?.focus();
   }));
-  $$("[data-mention-uid]").forEach((btn) => btn.addEventListener("click", () => {
+  $$("#dm-chat-messages [data-mention-uid]").forEach((btn) => btn.addEventListener("click", () => {
     const inp = $("#dm-compose-input");
     if (!inp || !btn.dataset.mentionUid) return;
     inp.value = `${inp.value}<@${btn.dataset.mentionUid}> `;
     inp.focus();
   }));
+  if (activeDM) {
+    bindSharedMessageActions("#dm-chat-messages", activeDM.id, dmMessages, () => openDMChat(activeDM));
+  }
 }
 
 function renderDMThread(scrollBottom = true) {
@@ -2248,6 +2344,7 @@ async function loadDMs() {
     await api(`/api/v1/bookmarks/${b.dataset.delbm}`, { method: "DELETE" });
     loadDMs();
   }));
+  loadSocialRelationships();
 }
 
 $("#dm-search-input")?.addEventListener("input", renderDMConversationList);
@@ -2382,6 +2479,229 @@ $("#btn-sys-restart")?.addEventListener("click", async () => {
 $("#btn-revoke-all")?.addEventListener("click", async () => {
   await api("/api/v1/auth/revoke", { method: "POST" });
   location.reload();
+});
+
+// ── 21. V4 Expansion Handlers (Reminders, Presets, Token Health, Sniper Filters, Guild Tools, Social) ──
+async function loadReminders() {
+  const el = $("#reminders-list");
+  if (!el) return;
+  try {
+    const res = await api("/api/v1/reminders");
+    const rows = res.reminders || [];
+    el.innerHTML = rows.length
+      ? rows.map((r) => `
+        <div class="data-row">
+          <div class="data-main">
+            <div class="data-title">${esc(r.text)}</div>
+            <div class="muted mono">in ${r.due_in}s${r.channel_id ? ` · ch ${esc(r.channel_id)}` : ""}</div>
+          </div>
+          <button type="button" class="btn-ghost-sm" data-delrem="${r.id}">Cancel</button>
+        </div>`).join("")
+      : `<div class="muted">No active reminders.</div>`;
+    el.querySelectorAll("[data-delrem]").forEach((b) => b.addEventListener("click", async () => {
+      await api(`/api/v1/reminders/${b.dataset.delrem}`, { method: "DELETE" });
+      loadReminders();
+    }));
+  } catch {}
+}
+
+$("#btn-rem-refresh")?.addEventListener("click", loadReminders);
+$("#btn-rem-add")?.addEventListener("click", async () => {
+  const duration = $("#rem-dur")?.value.trim();
+  const channel_id = $("#rem-cid")?.value.trim() || "";
+  const text = $("#rem-text")?.value.trim();
+  if (!duration || !text) return toast("Duration and text required");
+  await api("/api/v1/reminders", { method: "POST", body: { duration, channel_id, text } });
+  $("#rem-text").value = "";
+  toast("Reminder set");
+  loadReminders();
+});
+
+async function loadPresencePresets() {
+  const el = $("#presence-presets-list");
+  if (!el) return;
+  try {
+    const res = await api("/api/v1/presence/presets");
+    const rows = res.presets || [];
+    el.innerHTML = rows.length
+      ? rows.map((p) => `
+        <div class="data-row">
+          <div class="data-main">
+            <div class="data-title">${esc(p.name)} <span class="gold-chip mono">${esc(p.online_status)}</span></div>
+            <div class="muted">${esc(p.custom_status || p.activity_title || "Default")}</div>
+          </div>
+          <div class="inline-actions">
+            <button type="button" class="btn-expressive sm" data-apply-preset="${esc(p.name)}">Apply</button>
+            <button type="button" class="btn-ghost-sm" data-del-preset="${esc(p.name)}">×</button>
+          </div>
+        </div>`).join("")
+      : `<div class="muted">No saved presets yet.</div>`;
+    el.querySelectorAll("[data-apply-preset]").forEach((b) => b.addEventListener("click", async () => {
+      await api("/api/v1/presence/presets", { method: "POST", body: { apply: true, name: b.dataset.applyPreset } });
+      toast(`Applied preset: ${b.dataset.applyPreset}`);
+    }));
+    el.querySelectorAll("[data-del-preset]").forEach((b) => b.addEventListener("click", async () => {
+      await api(`/api/v1/presence/presets/${encodeURIComponent(b.dataset.delPreset)}`, { method: "DELETE" });
+      loadPresencePresets();
+    }));
+  } catch {}
+}
+
+$("#btn-preset-save")?.addEventListener("click", async () => {
+  const name = $("#preset-name")?.value.trim();
+  if (!name) return toast("Preset name required");
+  await api("/api/v1/presence/presets", { method: "POST", body: { name } });
+  $("#preset-name").value = "";
+  toast(`Saved preset: ${name}`);
+  loadPresencePresets();
+});
+
+$("#btn-tok-check")?.addEventListener("click", async () => {
+  const token = $("#tok-check-input")?.value.trim();
+  const out = $("#tok-check-out");
+  if (!token || !out) return toast("Paste a token to inspect");
+  out.classList.remove("hidden");
+  out.textContent = "Checking...";
+  try {
+    const res = await api("/api/v1/tools/checktoken", { method: "POST", body: { token } });
+    out.textContent = JSON.stringify(res, null, 2);
+  } catch (err) {
+    out.textContent = `Error: ${err.message}`;
+  }
+});
+
+async function loadSniperFilters() {
+  const el = $("#sniper-ig-list");
+  if (!el) return;
+  try {
+    const res = await api("/api/v1/intel/sniper-filters");
+    const ids = res.ignored_guilds || [];
+    el.innerHTML = ids.length
+      ? ids.map((id) => `<span class="kw-item mono">${esc(id)}<button type="button" data-unig="${esc(id)}">×</button></span>`).join("")
+      : `<span class="muted">No ignored guilds.</span>`;
+    el.querySelectorAll("[data-unig]").forEach((b) => b.addEventListener("click", async () => {
+      await api("/api/v1/intel/sniper-filters", { method: "POST", body: { action: "remove", guild_id: b.dataset.unig } });
+      loadSniperFilters();
+    }));
+  } catch {}
+}
+
+$("#btn-sniper-ig-add")?.addEventListener("click", async () => {
+  const guild_id = $("#sniper-ig-gid")?.value.trim();
+  if (!guild_id) return toast("Guild ID required");
+  await api("/api/v1/intel/sniper-filters", { method: "POST", body: { action: "add", guild_id } });
+  $("#sniper-ig-gid").value = "";
+  toast("Guild added to sniper ignore list");
+  loadSniperFilters();
+});
+
+$("#btn-gchat-load-more")?.addEventListener("click", () => {
+  if (activeGuildChat) openGuildChannelChat(activeGuildChat.gid, activeGuildChat.cid, activeGuildChat.cname, activeGuildChat.gname, true);
+});
+
+$("#btn-gmem-search")?.addEventListener("click", async () => {
+  const gid = $("#gmem-gid")?.value.trim();
+  const q = $("#gmem-q")?.value.trim() || "";
+  if (!gid) return toast("Guild ID required");
+  const res = await api(`/api/v1/guilds/${encodeURIComponent(gid)}/members?q=${encodeURIComponent(q)}`);
+  const rows = res.members || [];
+  $("#gmem-list").innerHTML = rows.length
+    ? rows.map((m) => `
+      <div class="data-row">
+        <div class="data-main">
+          <div class="data-title">${esc(m.display_name)} <span class="muted mono">${esc(m.username)}</span></div>
+          <div class="muted mono">${esc(m.id)}${m.top_role ? ` · ${esc(m.top_role)}` : ""}</div>
+        </div>
+        <button type="button" class="btn-ghost-sm" data-pick-mem="${esc(m.id)}">Use ID</button>
+      </div>`).join("")
+    : `<div class="muted">No matching cached members.</div>`;
+  $("#gmem-list").querySelectorAll("[data-pick-mem]").forEach((b) => b.addEventListener("click", () => {
+    if ($("#gmod-uid")) $("#gmod-uid").value = b.dataset.pickMem;
+    if ($("#intel-user-id")) $("#intel-user-id").value = b.dataset.pickMem;
+    toast(`Selected ${b.dataset.pickMem}`);
+  }));
+});
+
+$("#btn-stealall-run")?.addEventListener("click", async () => {
+  const src = $("#stealall-src")?.value.trim();
+  const dst = $("#stealall-dst")?.value.trim();
+  if (!src || !dst) return toast("Source and Target Guild IDs required");
+  const res = await api(`/api/v1/guilds/${encodeURIComponent(dst)}/steal-all`, { method: "POST", body: { source_guild_id: src, limit: 10 } });
+  toast(res.detail);
+});
+
+async function loadGuildInvites(gid) {
+  const res = await api(`/api/v1/guilds/${encodeURIComponent(gid)}/invites`);
+  const rows = res.invites || [];
+  $("#ginv-list").innerHTML = rows.length
+    ? rows.map((i) => `<div class="data-row"><div class="data-main"><div class="data-title mono">${esc(i.url)}</div><div class="muted">#${esc(i.channel)} · ${i.uses} uses</div></div></div>`).join("")
+    : `<div class="muted">${esc(res.error || "No active invites.")}</div>`;
+}
+
+$("#btn-ginv-list")?.addEventListener("click", async () => {
+  const gid = $("#ginv-gid")?.value.trim();
+  if (!gid) return toast("Guild ID required");
+  loadGuildInvites(gid);
+});
+$("#btn-ginv-create")?.addEventListener("click", async () => {
+  const gid = $("#ginv-gid")?.value.trim();
+  if (!gid) return toast("Guild ID required");
+  const res = await api(`/api/v1/guilds/${encodeURIComponent(gid)}/invites`, { method: "POST", body: {} });
+  toast(`Created: ${res.url}`);
+  loadGuildInvites(gid);
+});
+
+let socialTab = "friends";
+let socialCache = { friends: [], incoming: [], outgoing: [], blocked: [] };
+
+function renderSocialList() {
+  const el = $("#social-list");
+  if (!el) return;
+  const rows = socialCache[socialTab] || [];
+  el.innerHTML = rows.length
+    ? rows.map((u) => `
+      <div class="data-row">
+        <div class="data-main">
+          <div class="data-title">${esc(u.global_name || u.username)} <span class="muted mono">${esc(u.status || "")}</span></div>
+          <div class="muted mono">${esc(u.username)} · ${esc(u.id)}</div>
+        </div>
+        <div class="inline-actions">
+          ${socialTab === "incoming" ? `<button type="button" class="btn-expressive sm" data-soc-act="accept" data-soc-uid="${esc(u.id)}">Accept</button>` : ""}
+          <button type="button" class="btn-ghost-sm" data-soc-act="${socialTab === "blocked" ? "unblock" : "remove"}" data-soc-uid="${esc(u.id)}">${socialTab === "blocked" ? "Unblock" : "Remove"}</button>
+        </div>
+      </div>`).join("")
+    : `<div class="muted">No entries in ${esc(socialTab)}.</div>`;
+  el.querySelectorAll("[data-soc-act]").forEach((b) => b.addEventListener("click", async () => {
+    const res = await api("/api/v1/social/relationships", { method: "POST", body: { action: b.dataset.socAct, user_id: b.dataset.socUid } });
+    toast(res.detail || "Updated");
+    loadSocialRelationships();
+  }));
+}
+
+async function loadSocialRelationships() {
+  try {
+    socialCache = await api("/api/v1/social/relationships");
+    renderSocialList();
+  } catch {}
+}
+
+$$("#social-tab-seg button").forEach((b) => b.addEventListener("click", () => {
+  socialTab = b.dataset.socialTab;
+  renderSocialList();
+}));
+$("#btn-social-refresh")?.addEventListener("click", loadSocialRelationships);
+$("#btn-social-add")?.addEventListener("click", async () => {
+  const username = $("#social-add-name")?.value.trim();
+  if (!username) return toast("Username required");
+  const res = await api("/api/v1/social/relationships", { method: "POST", body: { action: "send_request", username } });
+  toast(res.detail || "Request processed");
+  $("#social-add-name").value = "";
+});
+$("#btn-dm-close-bulk")?.addEventListener("click", async () => {
+  if (!confirm("Close up to 15 open DM conversations?")) return;
+  const res = await api("/api/v1/dms/close-bulk", { method: "POST", body: { count: 15 } });
+  toast(`Closed ${res.closed} DM(s)`);
+  loadDMs();
 });
 
 checkSession();

@@ -779,7 +779,7 @@ button.sm { padding: 0.42rem 0.85rem; font-size: var(--text-sm); }
 .dm-msg-top { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
 .dm-msg-author { font-size: 0.82rem; font-weight: 700; color: var(--text-primary); }
 .dm-msg.self .dm-msg-author { color: var(--gold-bright); }
-.dm-msg-actions { display: inline-flex; gap: 0.3rem; opacity: 0.78; }
+.dm-msg-actions { display: inline-flex; flex-wrap: wrap; gap: 0.3rem; opacity: 0.78; }
 .dm-msg:hover .dm-msg-actions { opacity: 1; }
 .dm-msg-act-btn {
   padding: 0.14rem 0.48rem; font-size: 0.7rem; border-radius: 999px;

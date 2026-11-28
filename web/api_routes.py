@@ -1430,6 +1430,17 @@ def register_routes(
     async def bookmarks_handler(request: web.Request) -> web.Response:
         auth.authenticate_request(request)
         from data.tracker import tracker
+        if request.method == "POST":
+            auth.authenticate_request(request, require_csrf=True)
+            data = await _body(request)
+            tag = str(data.get("tag", "web") or "web").strip()[:40]
+            author_name = str(data.get("author_name", "Unknown") or "Unknown").strip()[:80]
+            content = str(data.get("content", "") or "").strip()[:1500]
+            jump_url = str(data.get("jump_url", "") or "").strip()[:300]
+            if not content:
+                return _json({"error": "Bookmark content required"}, status=400)
+            bid = tracker.add_bookmark(tag, author_name, content, jump_url)
+            return _json({"ok": True, "id": bid, "bookmarks": tracker.list_bookmarks(limit=30)})
         if request.method == "DELETE":
             auth.authenticate_request(request, require_csrf=True)
             bid = int(request.match_info["id"])
@@ -1933,16 +1944,22 @@ def register_routes(
 
     async def intel_esnipes(request: web.Request) -> web.Response:
         auth.authenticate_request(request)
+        q = request.query.get("q", "").strip().lower()
         util = bot.get_cog("Utility")
         rows = []
         if util and getattr(util, "_edited", None):
             for cid, dq in util._edited.items():
                 for rec in dq:
+                    before_txt = getattr(rec, "before", "") or ""
+                    after_txt = getattr(rec, "content", "") or ""
+                    auth_txt = str(rec.author)
+                    if q and q not in before_txt.lower() and q not in after_txt.lower() and q not in auth_txt.lower():
+                        continue
                     rows.append({
                         "channel_id": str(cid),
-                        "author": str(rec.author),
-                        "before": getattr(rec, "before", "") or "",
-                        "after": getattr(rec, "content", "") or "",
+                        "author": auth_txt,
+                        "before": before_txt,
+                        "after": after_txt,
                         "timestamp": rec.timestamp.timestamp() if getattr(rec, "timestamp", None) else 0,
                     })
         rows.sort(key=lambda x: x["timestamp"], reverse=True)
@@ -2292,6 +2309,383 @@ def register_routes(
         _activate_token_and_restart(info["token"])
         return _json({"ok": True, "restarting": True, "account_id": info["id"], "username": info["username"]})
 
+    # ── Phase 1-5 V4 Expansion: Reminders, CheckToken, Chat Actions, Social, Guild Tools, Presets ──
+
+    async def reminders_handler(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        store = getattr(bot, "_web_reminders", None)
+        if not isinstance(store, dict):
+            store = {}
+            bot._web_reminders = store
+
+        def _list_rows() -> list[dict[str, Any]]:
+            now = time.time()
+            return [
+                {
+                    "id": rid,
+                    "text": r["text"],
+                    "channel_id": r["channel_id"],
+                    "due_in": max(0, int(r["due_at"] - now)),
+                    "due_at": int(r["due_at"]),
+                }
+                for rid, r in sorted(store.items(), key=lambda x: x[1]["due_at"])
+            ]
+
+        if request.method == "DELETE":
+            auth.authenticate_request(request, require_csrf=True)
+            rid = int(request.match_info["id"])
+            entry = store.pop(rid, None)
+            if entry and entry.get("task") and not entry["task"].done():
+                entry["task"].cancel()
+            return _json({"ok": bool(entry), "reminders": _list_rows()})
+
+        if request.method == "POST":
+            auth.authenticate_request(request, require_csrf=True)
+            data = await _body(request)
+            dur_str = str(data.get("duration", "")).strip()
+            text = str(data.get("text", "")).strip()[:500]
+            cid_raw = str(data.get("channel_id", "")).strip()
+            from modules.tools import _parse_duration
+            secs = _parse_duration(dur_str)
+            if not secs or secs < 5 or not text:
+                return _json({"error": "Valid duration (e.g. 5m, 1h) and text required"}, status=400)
+            cur_seq = getattr(bot, "_web_reminder_seq", 0)
+            seq = (cur_seq if isinstance(cur_seq, int) else 0) + 1
+            bot._web_reminder_seq = seq
+            due_at = time.time() + secs
+
+            async def _fire(rid: int, wait_s: int, msg_text: str, cid_str: str) -> None:
+                try:
+                    await asyncio.sleep(wait_s)
+                    store.pop(rid, None)
+                    if cid_str.isdigit():
+                        ch = await _resolve_channel(int(cid_str))
+                        if ch:
+                            await ch.send(f"⏰ **Reminder:** {msg_text}")
+                    await broadcast({"type": "reminder", "data": {"id": rid, "text": msg_text}})
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+
+            task = asyncio.create_task(_fire(seq, secs, text, cid_raw))
+            store[seq] = {"text": text, "channel_id": cid_raw, "due_at": due_at, "task": task}
+            return _json({"ok": True, "id": seq, "reminders": _list_rows()})
+
+        return _json({"reminders": _list_rows()})
+
+    async def checktoken_tool(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        tools = bot.get_cog("Tools")
+        if not tools:
+            return _json({"error": "Tools cog unavailable"}, status=503)
+        data = await _body(request)
+        aid = str(data.get("account_id", "")).strip()
+        raw_tok = auth.get_account_token(aid) if aid else str(data.get("token", "")).strip().strip("'\"")
+        if not raw_tok or len(raw_tok) < 20:
+            return _json({"error": "Valid token or account_id required"}, status=400)
+        resp = await tools._get_http_client().get(
+            "https://discord.com/api/v9/users/@me",
+            headers={"Authorization": raw_tok},
+        )
+        if resp.status_code != 200:
+            return _json({"valid": False, "status": resp.status_code, "error": f"Rejected (HTTP {resp.status_code})"})
+        u = resp.json()
+        prem_map = {0: "None", 1: "Nitro Classic", 2: "Nitro", 3: "Nitro Basic"}
+        return _json({
+            "valid": True,
+            "id": str(u.get("id", "")),
+            "username": f"{u.get('username', '')}#{u.get('discriminator', '0')}",
+            "global_name": u.get("global_name") or u.get("username") or "",
+            "nitro": prem_map.get(u.get("premium_type", 0), "Unknown"),
+            "mfa": bool(u.get("mfa_enabled", False)),
+            "verified": bool(u.get("verified", False)),
+            "phone": bool(u.get("phone")),
+            "email": bool(u.get("email")),
+        })
+
+    async def channel_message_edit(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        cid = int(request.match_info["cid"])
+        mid = int(request.match_info["mid"])
+        data = await _body(request)
+        content = str(data.get("content", "")).strip()[:2000]
+        if not content:
+            return _json({"error": "Content required"}, status=400)
+        ch = await _resolve_channel(cid)
+        if not ch:
+            return _json({"error": "Channel not found"}, status=404)
+        msg = await ch.fetch_message(mid)
+        edited = await msg.edit(content=content)
+        return _json({"ok": True, "message": _serialize_dm_msg(edited)})
+
+    async def channel_message_delete(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        cid = int(request.match_info["cid"])
+        mid = int(request.match_info["mid"])
+        ch = await _resolve_channel(cid)
+        if not ch:
+            return _json({"error": "Channel not found"}, status=404)
+        msg = await ch.fetch_message(mid)
+        await msg.delete()
+        return _json({"ok": True, "deleted_id": str(mid)})
+
+    async def channel_message_react(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        cid = int(request.match_info["cid"])
+        mid = int(request.match_info["mid"])
+        data = await _body(request)
+        emoji = str(data.get("emoji", "")).strip()
+        if not emoji:
+            return _json({"error": "Emoji required"}, status=400)
+        ch = await _resolve_channel(cid)
+        if not ch:
+            return _json({"error": "Channel not found"}, status=404)
+        msg = await ch.fetch_message(mid)
+        await msg.add_reaction(emoji)
+        return _json({"ok": True})
+
+    async def guild_channel_export(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        cid = int(request.match_info["cid"])
+        limit = max(10, min(int(request.query.get("limit", "150")), 400))
+        ch = await _resolve_channel(cid)
+        if not ch:
+            return _json({"error": "Channel not found"}, status=404)
+        lines = []
+        async for m in ch.history(limit=limit, oldest_first=False):
+            ts = m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else ""
+            lines.append(f"[{ts}] {m.author}: {m.content or '[Attachment/Embed]'}")
+        lines.reverse()
+        cname = getattr(ch, "name", str(cid))
+        return web.Response(
+            text="\n".join(lines),
+            headers={"Content-Disposition": f'attachment; filename="channel_{cname}_{cid}.txt"'},
+            content_type="text/plain",
+        )
+
+    async def social_relationships_handler(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        tools = bot.get_cog("Tools")
+        token_val = getattr(bot.http, "token", "") or ""
+        if request.method == "POST":
+            auth.authenticate_request(request, require_csrf=True)
+            if not tools or not token_val:
+                return _json({"error": "Unavailable"}, status=503)
+            data = await _body(request)
+            act = str(data.get("action", "")).strip()
+            uid = str(data.get("user_id", "")).strip()
+            uname = str(data.get("username", "")).strip()
+            cli = tools._get_http_client()
+            hdr = {"Authorization": token_val}
+            if act == "send_request" and uname:
+                r = await cli.post("https://discord.com/api/v9/users/@me/relationships", headers=hdr, json={"username": uname})
+                return _json({"ok": r.status_code in (200, 204), "status": r.status_code, "detail": f"Sent request to {uname}" if r.status_code in (200, 204) else r.text[:140]})
+            if not uid.isdigit():
+                return _json({"error": "Valid user_id required"}, status=400)
+            if act == "accept":
+                r = await cli.put(f"https://discord.com/api/v9/users/@me/relationships/{uid}", headers=hdr, json={})
+                return _json({"ok": r.status_code in (200, 204), "detail": "Friend request accepted"})
+            if act in ("remove", "unblock"):
+                r = await cli.delete(f"https://discord.com/api/v9/users/@me/relationships/{uid}", headers=hdr)
+                return _json({"ok": r.status_code in (200, 204), "detail": "Relationship removed"})
+            if act == "block":
+                r = await cli.put(f"https://discord.com/api/v9/users/@me/relationships/{uid}", headers=hdr, json={"type": 2})
+                return _json({"ok": r.status_code in (200, 204), "detail": "User blocked"})
+            return _json({"error": "Unknown relationship action"}, status=400)
+
+        friends, incoming, outgoing, blocked = [], [], [], []
+        rels = list(getattr(bot, "relationships", []) or [])
+        seen_ids: set[str] = set()
+        for rel in rels:
+            u = getattr(rel, "user", None)
+            if not u:
+                continue
+            uid = str(u.id)
+            seen_ids.add(uid)
+            rtype = str(getattr(rel, "type", "")).lower()
+            item = {
+                "id": uid,
+                "username": str(u),
+                "global_name": getattr(u, "global_name", None) or u.name,
+                "avatar": str(u.display_avatar.url) if getattr(u, "display_avatar", None) else "",
+                "status": str(getattr(rel, "status", "offline") or "offline"),
+            }
+            if "friend" in rtype:
+                friends.append(item)
+            elif "incoming" in rtype:
+                incoming.append(item)
+            elif "outgoing" in rtype:
+                outgoing.append(item)
+            elif "blocked" in rtype:
+                blocked.append(item)
+        if not rels:
+            for u in getattr(bot, "friends", []) or []:
+                uid = str(u.id)
+                if uid in seen_ids:
+                    continue
+                friends.append({
+                    "id": uid,
+                    "username": str(u),
+                    "global_name": getattr(u, "global_name", None) or u.name,
+                    "avatar": str(u.display_avatar.url) if getattr(u, "display_avatar", None) else "",
+                    "status": str(getattr(u, "status", "offline") or "offline"),
+                })
+        return _json({"friends": friends, "incoming": incoming, "outgoing": outgoing, "blocked": blocked})
+
+    async def dms_close_bulk(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        data = await _body(request)
+        count = max(1, min(int(data.get("count", 15)), 50))
+        closed = 0
+        for ch in list(getattr(bot, "private_channels", []) or []):
+            if closed >= count:
+                break
+            if isinstance(ch, discord.DMChannel):
+                try:
+                    await ch.close()
+                    closed += 1
+                    await asyncio.sleep(0.25)
+                except Exception:
+                    pass
+        return _json({"ok": True, "closed": closed})
+
+    async def guild_members_search(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        gid = int(request.match_info["id"])
+        q = request.query.get("q", "").strip().lower()
+        g = bot.get_guild(gid)
+        if not g:
+            return _json({"error": "Guild not found"}, status=404)
+        out = []
+        for m in getattr(g, "members", []) or []:
+            hay = f"{m.name} {getattr(m, 'global_name', '') or ''} {getattr(m, 'nick', '') or ''} {m.id}".lower()
+            if q and q not in hay:
+                continue
+            out.append({
+                "id": str(m.id),
+                "username": str(m),
+                "display_name": getattr(m, "display_name", None) or m.name,
+                "avatar": str(m.display_avatar.url) if getattr(m, "display_avatar", None) else "",
+                "bot": bool(getattr(m, "bot", False)),
+                "top_role": str(getattr(m, "top_role", "")) if getattr(m, "top_role", None) else "",
+            })
+            if len(out) >= 30:
+                break
+        return _json({"members": out})
+
+    async def guild_steal_all(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        dst_id = int(request.match_info["id"])
+        data = await _body(request)
+        src_id = int(str(data.get("source_guild_id", "0") or "0"))
+        limit = max(1, min(int(data.get("limit", 10)), 15))
+        src = bot.get_guild(src_id)
+        dst = bot.get_guild(dst_id)
+        tools = bot.get_cog("Tools")
+        if not src or not dst or not tools:
+            return _json({"error": "Source/target guild not found"}, status=404)
+        copied = 0
+        for em in list(getattr(src, "emojis", []) or [])[:limit]:
+            try:
+                r = await tools._get_http_client().get(str(em.url))
+                if r.status_code == 200:
+                    await dst.create_custom_emoji(name=em.name, image=r.content)
+                    copied += 1
+                    await asyncio.sleep(0.4)
+            except Exception:
+                pass
+        return _json({"ok": True, "copied": copied, "detail": f"Copied {copied} emoji(s) to {dst.name}"})
+
+    async def guild_invites_handler(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        gid = int(request.match_info["id"])
+        g = bot.get_guild(gid)
+        if not g:
+            return _json({"error": "Guild not found"}, status=404)
+        if request.method == "POST":
+            auth.authenticate_request(request, require_csrf=True)
+            data = await _body(request)
+            cid = int(str(data.get("channel_id", "0") or "0"))
+            ch = g.get_channel(cid) or (g.text_channels[0] if g.text_channels else None)
+            if not ch:
+                return _json({"error": "No channel available for invite"}, status=404)
+            inv = await ch.create_invite(max_age=int(data.get("max_age", 0)), max_uses=int(data.get("max_uses", 0)))
+            return _json({"ok": True, "url": str(inv.url), "code": inv.code})
+        try:
+            invs = await g.invites()
+            return _json({"invites": [{"code": i.code, "url": str(i.url), "uses": i.uses or 0, "channel": str(i.channel)} for i in invs[:25]]})
+        except Exception as exc:
+            return _json({"invites": [], "error": str(exc)})
+
+    async def presence_presets_handler(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        from data.tracker import tracker
+        raw = tracker.get_state("presence_presets") or "[]"
+        try:
+            presets: list[dict[str, Any]] = json.loads(raw)
+        except Exception:
+            presets = []
+        if request.method == "DELETE":
+            auth.authenticate_request(request, require_csrf=True)
+            name = request.match_info["name"]
+            presets = [p for p in presets if p.get("name") != name]
+            tracker.set_state("presence_presets", json.dumps(presets))
+            return _json({"ok": True, "presets": presets})
+        if request.method == "POST":
+            auth.authenticate_request(request, require_csrf=True)
+            data = await _body(request)
+            if data.get("apply"):
+                name = str(data.get("name", "")).strip()
+                match = next((p for p in presets if p.get("name") == name), None)
+                if not match:
+                    return _json({"error": "Preset not found"}, status=404)
+                status_cog = bot.get_cog("Status")
+                if status_cog:
+                    status_cog._online_status = match.get("online_status", "online")
+                    status_cog._custom_status_text = match.get("custom_status", "")
+                    status_cog._custom_status_enabled = bool(status_cog._custom_status_text)
+                    status_cog._activity_kind = match.get("activity_kind", "")
+                    status_cog._activity_title = match.get("activity_title", "")
+                    await status_cog.apply_default_rpc()
+                return _json({"ok": True, "applied": match})
+            name = str(data.get("name", "")).strip()[:30]
+            if not name:
+                return _json({"error": "Preset name required"}, status=400)
+            status_cog = bot.get_cog("Status")
+            entry = {
+                "name": name,
+                "online_status": str(data.get("online_status") or (getattr(status_cog, "_online_status", "online") if status_cog else "online")),
+                "custom_status": str(data.get("custom_status") if "custom_status" in data else (getattr(status_cog, "_custom_status_text", "") if status_cog else "")),
+                "activity_kind": str(data.get("activity_kind") if "activity_kind" in data else (getattr(status_cog, "_activity_kind", "") if status_cog else "")),
+                "activity_title": str(data.get("activity_title") if "activity_title" in data else (getattr(status_cog, "_activity_title", "") if status_cog else "")),
+            }
+            presets = [p for p in presets if p.get("name") != name]
+            presets.insert(0, entry)
+            tracker.set_state("presence_presets", json.dumps(presets[:20]))
+            return _json({"ok": True, "presets": presets[:20]})
+        return _json({"presets": presets})
+
+    async def sniper_filters_handler(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        tools = bot.get_cog("Tools")
+        if not tools:
+            return _json({"ignored_guilds": []})
+        if request.method == "POST":
+            auth.authenticate_request(request, require_csrf=True)
+            data = await _body(request)
+            act = str(data.get("action", "add"))
+            gid_str = str(data.get("guild_id", "")).strip()
+            if not gid_str.isdigit():
+                return _json({"error": "Valid guild_id required"}, status=400)
+            gid = int(gid_str)
+            if act == "remove":
+                tools._sniper_ignored_guilds.discard(gid)
+            else:
+                tools._sniper_ignored_guilds.add(gid)
+            tools._save_state()
+        return _json({"ignored_guilds": [str(g) for g in sorted(tools._sniper_ignored_guilds)]})
+
     # Register Routes
     r = app.router
     r.add_get("/api/v1/auth/me", auth_me)
@@ -2317,10 +2711,15 @@ def register_routes(
     r.add_post("/api/v1/presence/hypesquad", set_hypesquad)
     r.add_post("/api/v1/presence/rotate", set_status_rotate)
     r.add_post("/api/v1/presence/spoofer", control_spoofer)
+    r.add_get("/api/v1/presence/presets", presence_presets_handler)
+    r.add_post("/api/v1/presence/presets", presence_presets_handler)
+    r.add_delete("/api/v1/presence/presets/{name}", presence_presets_handler)
 
     r.add_get("/api/v1/intel/snipes", get_snipes)
     r.add_get("/api/v1/intel/esnipes", intel_esnipes)
     r.add_get("/api/v1/intel/snipers", intel_snipers)
+    r.add_get("/api/v1/intel/sniper-filters", sniper_filters_handler)
+    r.add_post("/api/v1/intel/sniper-filters", sniper_filters_handler)
     r.add_get("/api/v1/intel/radar", get_radar)
     r.add_delete("/api/v1/intel/radar", clear_radar)
     r.add_get("/api/v1/intel/stalk", get_stalk)
@@ -2332,6 +2731,7 @@ def register_routes(
     r.add_post("/api/v1/intel/vanity", vanity_handler)
     r.add_delete("/api/v1/intel/vanity", vanity_handler)
     r.add_post("/api/v1/tools/inspect", inspect_tool)
+    r.add_post("/api/v1/tools/checktoken", checktoken_tool)
     r.add_post("/api/v1/tools/invite-inspect", invite_inspect)
     r.add_post("/api/v1/tools/steal-emoji", steal_emoji)
     r.add_post("/api/v1/tools/translate", translate_tool)
@@ -2350,8 +2750,13 @@ def register_routes(
     r.add_get("/api/v1/guilds", list_guilds)
     r.add_get("/api/v1/guilds/{id}/channels/{cid}/messages", guild_channel_messages_get)
     r.add_post("/api/v1/guilds/{id}/channels/{cid}/messages", guild_channel_messages_post)
+    r.add_get("/api/v1/guilds/{id}/channels/{cid}/export", guild_channel_export)
     r.add_post("/api/v1/guilds/{id}/selfpurge", guild_selfpurge)
+    r.add_get("/api/v1/guilds/{id}/members", guild_members_search)
     r.add_post("/api/v1/guilds/{id}/members/action", guild_member_action)
+    r.add_post("/api/v1/guilds/{id}/steal-all", guild_steal_all)
+    r.add_get("/api/v1/guilds/{id}/invites", guild_invites_handler)
+    r.add_post("/api/v1/guilds/{id}/invites", guild_invites_handler)
     r.add_get("/api/v1/guilds/{id}/webhooks", guild_webhooks_handler)
     r.add_post("/api/v1/guilds/{id}/webhooks", guild_webhooks_handler)
     r.add_delete("/api/v1/guilds/{id}/webhooks/{wid}", guild_webhooks_handler)
@@ -2366,9 +2771,17 @@ def register_routes(
     r.add_post("/api/v1/voice", voice_control)
     r.add_post("/api/v1/voice/extra", voice_extra_control)
 
+    r.add_patch("/api/v1/channels/{cid}/messages/{mid}", channel_message_edit)
+    r.add_delete("/api/v1/channels/{cid}/messages/{mid}", channel_message_delete)
+    r.add_post("/api/v1/channels/{cid}/messages/{mid}/react", channel_message_react)
+
+    r.add_get("/api/v1/social/relationships", social_relationships_handler)
+    r.add_post("/api/v1/social/relationships", social_relationships_handler)
+
     r.add_get("/api/v1/afk/pings", afk_pings_handler)
     r.add_delete("/api/v1/afk/pings", afk_pings_handler)
     r.add_get("/api/v1/dms", list_dms)
+    r.add_post("/api/v1/dms/close-bulk", dms_close_bulk)
     r.add_get("/api/v1/dms/{id}/messages", dm_messages_get)
     r.add_post("/api/v1/dms/{id}/messages", dm_messages_post)
     r.add_get("/api/v1/dms/{id}/export", export_dm)
@@ -2378,7 +2791,11 @@ def register_routes(
     r.add_post("/api/v1/quests/stop", quests_stop)
     r.add_post("/api/v1/quests/config", quests_config)
     r.add_get("/api/v1/bookmarks", bookmarks_handler)
+    r.add_post("/api/v1/bookmarks", bookmarks_handler)
     r.add_delete("/api/v1/bookmarks/{id}", bookmarks_handler)
+    r.add_get("/api/v1/reminders", reminders_handler)
+    r.add_post("/api/v1/reminders", reminders_handler)
+    r.add_delete("/api/v1/reminders/{id}", reminders_handler)
     r.add_get("/api/v1/schedules", schedules_handler)
     r.add_post("/api/v1/schedules", schedules_handler)
     r.add_delete("/api/v1/schedules/{id}", schedules_handler)
