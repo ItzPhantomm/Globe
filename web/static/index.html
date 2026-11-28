@@ -2,16 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Globe — Control Plane</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Globe — Bot Control</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/animejs@3.2.2/lib/anime.min.js" defer></script>
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
   <div class="ambient-grain" aria-hidden="true"></div>
+
+  <!-- Chromium Real Liquid Glass SVG Displacement Filter -->
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute;pointer-events:none;">
+    <filter id="lg-dock-filter" x="0%" y="0%" width="100%" height="100%" color-interpolation-filters="sRGB">
+      <feImage id="lg-dock-map" x="0" y="0" preserveAspectRatio="none" result="map" />
+      <feDisplacementMap in="SourceGraphic" in2="map" scale="36" xChannelSelector="R" yChannelSelector="G" />
+    </filter>
+  </svg>
 
   <!-- Auth Gate -->
   <section id="auth-gate" class="auth-gate hidden" aria-label="Sign in">
@@ -26,17 +34,17 @@
         </div>
         <div class="live-chip">
           <span class="pulse-ring"></span>
-          <span>Runtime v3.1</span>
+          <span>v3.1</span>
         </div>
       </div>
 
       <div class="auth-visual-inner">
-        <h1 class="auth-headline">Control Globe<br />in real time.</h1>
-        <p class="auth-sub">Sign in with your Discord account token. Switches, snipes, presence tools, and logs talk directly to your running bot in memory.</p>
+        <h1 class="auth-headline">Control Globe<br />from anywhere.</h1>
+        <p class="auth-sub">Sign in with your Discord account token. Switches, voice 24/7, snipes, automation rules, and live logs talk directly to the bot in memory.</p>
         <dl class="auth-specs">
-          <div class="spec-tile"><dt>Transport</dt><dd class="mono">TLS · WS Push</dd></div>
-          <div class="spec-tile"><dt>Token Vault</dt><dd class="mono">AES-256-GCM</dd></div>
-          <div class="spec-tile"><dt>Auth Guard</dt><dd class="mono">HMAC · CSRF</dd></div>
+          <div class="spec-tile m3-tile-a"><dt>Stream</dt><dd class="mono">WS Push · TLS</dd></div>
+          <div class="spec-tile m3-tile-b"><dt>Vault</dt><dd class="mono">AES-256-GCM</dd></div>
+          <div class="spec-tile m3-tile-c"><dt>Session</dt><dd class="mono">HMAC · CSRF</dd></div>
         </dl>
       </div>
     </div>
@@ -45,7 +53,7 @@
       <form id="login-form" class="login-card bento-surface" autocomplete="off">
         <div class="login-head">
           <h2>Sign in</h2>
-          <p class="muted">Paste your active Discord account token to continue.</p>
+          <p class="muted">Paste your active Discord account token.</p>
         </div>
 
         <div class="field">
@@ -64,202 +72,235 @@
         <div id="login-error" class="error-banner hidden" role="alert"></div>
 
         <button type="submit" id="login-submit" class="btn-expressive full-w">
-          <span>Enter workspace</span>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+          <span>Sign in</span>
         </button>
       </form>
     </div>
   </section>
 
-  <!-- Main Workspace -->
+  <!-- Main Single-Canvas Workspace (No Side Menu Bar, Single Liquid Glass Floating Dock) -->
   <div id="workspace" class="workspace hidden">
-    <aside id="sidebar" class="sidebar" aria-label="Primary navigation">
-      <div class="sidebar-head">
+    <header class="topbar">
+      <div class="topbar-left">
         <div class="brand-lockup">
           <svg class="m3-morph-badge sm" viewBox="0 0 100 100" aria-hidden="true">
             <path id="nav-morph-path" d="" />
           </svg>
           <span class="wordmark">Globe</span>
         </div>
-        <button id="close-drawer" class="m3-pill-btn mobile-only" aria-label="Close navigation">Close</button>
+        <span class="top-sep" aria-hidden="true">/</span>
+        <h1 id="view-title" class="view-title">Overview</h1>
       </div>
 
-      <nav class="nav-list" id="nav-list">
-        <button class="nav-item active" data-view="overview">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg>
-          <span>Overview</span>
-        </button>
-        <button class="nav-item" data-view="presence">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
-          <span>Presence Studio</span>
-        </button>
-        <button class="nav-item" data-view="intel">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-          <span>Intelligence &amp; OSINT</span>
-        </button>
-        <button class="nav-item" data-view="servers">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
-          <span>Servers &amp; Voice</span>
-        </button>
-        <button class="nav-item" data-view="dms">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          <span>DMs &amp; Dispatch</span>
-        </button>
-        <button class="nav-item" data-view="system">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          <span>System &amp; Jobs</span>
-        </button>
-      </nav>
+      <div class="topbar-right">
+        <div id="dynamic-pill" class="dynamic-pill">
+          <span id="ws-dot" class="status-dot"></span>
+          <span id="ws-label" class="mono">Connecting</span>
+          <span id="pill-extra" class="pill-extra mono"></span>
+        </div>
 
-      <div class="sidebar-foot">
-        <div class="account-strip bento-surface">
+        <button id="btn-cmdk" class="cmdk-trigger" title="Quick Actions (Ctrl/Cmd+K)">
+          <kbd class="mono">⌘K</kbd>
+        </button>
+
+        <div class="account-pill">
           <img id="acct-avatar" class="avatar" src="" alt="" />
           <div class="account-meta">
-            <div id="acct-name" class="acct-name">—</div>
-            <div id="acct-mask" class="mono muted">—</div>
+            <span id="acct-name" class="acct-name">—</span>
+            <span id="acct-mask" class="mono acct-mask">—</span>
           </div>
+          <button id="btn-logout" class="logout-chip" title="Sign out" aria-label="Sign out">Out</button>
         </div>
-        <button id="btn-logout" class="btn-tonal full-w">Sign out</button>
       </div>
-    </aside>
+    </header>
 
-    <div class="main-col">
-      <header class="topbar">
-        <div class="topbar-left">
-          <button id="open-drawer" class="m3-pill-btn mobile-only" aria-label="Open menu">Menu</button>
-          <h1 id="view-title" class="view-title">Overview</h1>
+    <main class="content-area">
+      <!-- View: Overview -->
+      <section id="view-overview" class="view active">
+        <div class="bento-metrics">
+          <div class="metric-tile m3-tile-a bento-surface stagger-item">
+            <div class="metric-top">
+              <span class="metric-label">Gateway ping</span>
+              <span class="m3-shape-tag cookie" aria-hidden="true"></span>
+            </div>
+            <div id="m-latency" class="metric-val mono">— ms</div>
+          </div>
+          <div class="metric-tile m3-tile-b bento-surface stagger-item">
+            <div class="metric-top">
+              <span class="metric-label">Uptime</span>
+              <span class="m3-shape-tag clover" aria-hidden="true"></span>
+            </div>
+            <div id="m-uptime" class="metric-val mono">—</div>
+          </div>
+          <div class="metric-tile m3-tile-c bento-surface stagger-item">
+            <div class="metric-top">
+              <span class="metric-label">Servers / Friends</span>
+              <span class="m3-shape-tag burst" aria-hidden="true"></span>
+            </div>
+            <div id="m-reach" class="metric-val mono">—</div>
+          </div>
+          <div class="metric-tile m3-tile-d bento-surface stagger-item">
+            <div class="metric-top">
+              <span class="metric-label">Messages today / DB</span>
+              <span class="m3-shape-tag pill" aria-hidden="true"></span>
+            </div>
+            <div id="m-db" class="metric-val mono">—</div>
+          </div>
         </div>
 
-        <div class="topbar-right">
-          <div id="dynamic-pill" class="dynamic-pill">
-            <span id="ws-dot" class="status-dot"></span>
-            <span id="ws-label" class="mono">Connecting</span>
-            <span id="pill-extra" class="pill-extra mono"></span>
+        <div class="bento-split asymmetric">
+          <!-- Interactive Dual-Mode 21st.dev Chart -->
+          <div class="bento-card m3-hero-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2 id="chart-heading">Live Ping &amp; 24h Activity</h2>
+                <p class="muted" id="chart-sub">Hover or scrub the graph to inspect readings</p>
+              </div>
+              <div class="sliding-seg" id="chart-mode-seg">
+                <div class="seg-slider"></div>
+                <button type="button" class="active" data-chart-mode="activity">24h Messages</button>
+                <button type="button" data-chart-mode="ping">Live Ping</button>
+              </div>
+            </div>
+
+            <div class="chart-stage" id="chart-stage">
+              <div id="chart-tooltip" class="chart-tooltip hidden mono"></div>
+              <svg id="main-chart" viewBox="0 0 600 180" preserveAspectRatio="none" aria-label="Interactive chart">
+                <defs>
+                  <linearGradient id="chart-area-grad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#c8ff4c" stop-opacity="0.34" />
+                    <stop offset="100%" stop-color="#c8ff4c" stop-opacity="0.0" />
+                  </linearGradient>
+                </defs>
+                <g id="chart-grid"></g>
+                <g id="chart-bars"></g>
+                <path id="chart-area" class="chart-area" d="" />
+                <path id="chart-line" class="chart-line" d="" />
+                <line id="chart-crosshair" class="chart-crosshair hidden" x1="0" y1="10" x2="0" y2="165" />
+                <circle id="chart-hover-ring" class="chart-hover-ring hidden" cx="0" cy="0" r="8" />
+                <circle id="chart-hover-dot" class="chart-hover-dot hidden" cx="0" cy="0" r="4" />
+              </svg>
+            </div>
+
+            <div class="field">
+              <label for="prefix-input">Command prefix</label>
+              <div class="inline-form">
+                <input id="prefix-input" type="text" placeholder="Command prefix (e.g. g.)" maxlength="8" />
+                <button id="btn-save-prefix" class="btn-tonal">Save prefix</button>
+              </div>
+            </div>
           </div>
-          <button id="btn-cmdk" class="cmdk-trigger" title="Open Command Palette">
-            <span class="cmdk-label">Actions</span>
-            <kbd class="mono">⌘K</kbd>
-          </button>
+
+          <!-- M3 Expressive Switchboard -->
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Quick switchboard</h2>
+                <p class="muted">Flip features live with zero restart</p>
+              </div>
+            </div>
+            <div class="switch-list" id="switchboard">
+              <div class="switch-row">
+                <div>
+                  <div class="switch-title">No-prefix commands</div>
+                  <div class="muted">Run commands directly without typing prefix</div>
+                </div>
+                <button class="m3-switch" data-toggle="no_prefix" aria-pressed="false"><span class="m3-thumb"></span></button>
+              </div>
+              <div class="switch-row">
+                <div>
+                  <div class="switch-title">DM privacy wipe</div>
+                  <div class="muted">Delete DM messages automatically when read</div>
+                </div>
+                <button class="m3-switch" data-toggle="privacy" aria-pressed="false"><span class="m3-thumb"></span></button>
+              </div>
+              <div class="switch-row">
+                <div>
+                  <div class="switch-title">Giveaway sniper</div>
+                  <div class="muted">Auto-enter button &amp; reaction drops</div>
+                </div>
+                <button class="m3-switch" data-toggle="gsniper" aria-pressed="false"><span class="m3-thumb"></span></button>
+              </div>
+              <div class="switch-row">
+                <div>
+                  <div class="switch-title">Nitro sniper</div>
+                  <div class="muted">Fast gift link detection &amp; redeem</div>
+                </div>
+                <button class="m3-switch" data-toggle="nitro_sniper" aria-pressed="false"><span class="m3-thumb"></span></button>
+              </div>
+              <div class="switch-row">
+                <div>
+                  <div class="switch-title">Smart AFK mode</div>
+                  <div class="muted">5m cooldown auto-reply &amp; missed-ping list</div>
+                </div>
+                <button class="m3-switch" data-toggle="afk" aria-pressed="false"><span class="m3-thumb"></span></button>
+              </div>
+              <div class="switch-row">
+                <div>
+                  <div class="switch-title">Startup Globe RPC</div>
+                  <div class="muted">Keep RPC active while keeping custom status</div>
+                </div>
+                <button class="m3-switch" data-toggle="startup_rpc" aria-pressed="false"><span class="m3-thumb"></span></button>
+              </div>
+            </div>
+          </div>
         </div>
-      </header>
 
-      <main class="content-area">
-        <!-- View: Overview -->
-        <section id="view-overview" class="view active">
-          <div class="bento-metrics">
-            <div class="metric-tile bento-surface stagger-item">
-              <div class="metric-top">
-                <span class="metric-label">Gateway ping</span>
-                <span class="m3-shape-tag scircle" aria-hidden="true"></span>
-              </div>
-              <div id="m-latency" class="metric-val mono">— ms</div>
+        <div class="bento-card bento-surface stagger-item">
+          <div class="block-head">
+            <div>
+              <h2>Live bot logs</h2>
+              <p class="muted">Real-time WebSocket command &amp; gateway feed</p>
             </div>
-            <div class="metric-tile bento-surface stagger-item">
-              <div class="metric-top">
-                <span class="metric-label">Runtime uptime</span>
-                <span class="m3-shape-tag clover" aria-hidden="true"></span>
-              </div>
-              <div id="m-uptime" class="metric-val mono">—</div>
-            </div>
-            <div class="metric-tile bento-surface stagger-item">
-              <div class="metric-top">
-                <span class="metric-label">Servers / Friends</span>
-                <span class="m3-shape-tag burst" aria-hidden="true"></span>
-              </div>
-              <div id="m-reach" class="metric-val mono">—</div>
-            </div>
-            <div class="metric-tile bento-surface stagger-item">
-              <div class="metric-top">
-                <span class="metric-label">SQLite store</span>
-                <span class="m3-shape-tag pill" aria-hidden="true"></span>
-              </div>
-              <div id="m-db" class="metric-val mono">— KB</div>
-            </div>
+            <span class="mono volt-chip" id="spark-latest">— ms</span>
           </div>
+          <div id="log-stream" class="log-stream mono" aria-live="polite"></div>
+        </div>
+      </section>
 
-          <div class="bento-split">
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <div>
-                  <h2>Live switchboard</h2>
-                  <p class="muted">Toggle bot features live without restarting</p>
-                </div>
-              </div>
-              <div class="switch-list" id="switchboard">
-                <div class="switch-row">
-                  <div>
-                    <div class="switch-title">No-prefix commands</div>
-                    <div class="muted">Trigger commands directly without prefix</div>
-                  </div>
-                  <button class="m3-switch" data-toggle="no_prefix" aria-pressed="false"><span class="m3-thumb"></span></button>
-                </div>
-                <div class="switch-row">
-                  <div>
-                    <div class="switch-title">DM privacy wipe</div>
-                    <div class="muted">Auto-delete DM messages when read</div>
-                  </div>
-                  <button class="m3-switch" data-toggle="privacy" aria-pressed="false"><span class="m3-thumb"></span></button>
-                </div>
-                <div class="switch-row">
-                  <div>
-                    <div class="switch-title">Giveaway sniper</div>
-                    <div class="muted">Human-jitter button &amp; reaction entry</div>
-                  </div>
-                  <button class="m3-switch" data-toggle="gsniper" aria-pressed="false"><span class="m3-thumb"></span></button>
-                </div>
-                <div class="switch-row">
-                  <div>
-                    <div class="switch-title">Nitro sniper</div>
-                    <div class="muted">Instant gift link detection &amp; claim</div>
-                  </div>
-                  <button class="m3-switch" data-toggle="nitro_sniper" aria-pressed="false"><span class="m3-thumb"></span></button>
-                </div>
-                <div class="switch-row">
-                  <div>
-                    <div class="switch-title">Smart AFK mode</div>
-                    <div class="muted">5m cooldown auto-reply &amp; ping digest</div>
-                  </div>
-                  <button class="m3-switch" data-toggle="afk" aria-pressed="false"><span class="m3-thumb"></span></button>
-                </div>
-                <div class="switch-row">
-                  <div>
-                    <div class="switch-title">Startup Globe RPC</div>
-                    <div class="muted">Keep Rich Presence while guarding custom status</div>
-                  </div>
-                  <button class="m3-switch" data-toggle="startup_rpc" aria-pressed="false"><span class="m3-thumb"></span></button>
-                </div>
+      <!-- View: Presence -->
+      <section id="view-presence" class="view">
+        <div class="bento-split">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Status &amp; profile</h2>
+                <p class="muted">Online badge, custom status, bio, and HypeSquad</p>
               </div>
             </div>
-
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <div>
-                  <h2>Gateway ping</h2>
-                  <p class="muted">Updates every 4 seconds over WebSocket</p>
+            <div class="stack-form">
+              <div class="field">
+                <label>Online mode</label>
+                <div class="sliding-seg" id="status-mode-seg">
+                  <div class="seg-slider"></div>
+                  <button type="button" class="active" data-status-mode="online"><span class="mode-dot online"></span>Online</button>
+                  <button type="button" data-status-mode="idle"><span class="mode-dot idle"></span>Idle</button>
+                  <button type="button" data-status-mode="dnd"><span class="mode-dot dnd"></span>DND</button>
+                  <button type="button" data-status-mode="invisible"><span class="mode-dot offline"></span>Invisible</button>
                 </div>
-                <span class="mono mint-chip" id="spark-latest">— ms</span>
-              </div>
-              <div class="spark-wrap">
-                <svg id="latency-spark" viewBox="0 0 420 130" preserveAspectRatio="none" aria-label="Latency chart">
-                  <defs>
-                    <linearGradient id="spark-grad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stop-color="#4ade80" stop-opacity="0.32" />
-                      <stop offset="100%" stop-color="#4ade80" stop-opacity="0.0" />
-                    </linearGradient>
-                  </defs>
-                  <line x1="0" y1="42" x2="420" y2="42" class="spark-grid" />
-                  <line x1="0" y1="86" x2="420" y2="86" class="spark-grid" />
-                  <path id="spark-area" class="spark-area" d="" />
-                  <path id="spark-line" class="spark-line" d="" />
-                  <circle id="spark-dot-halo" class="spark-dot-halo" cx="0" cy="65" r="8" />
-                  <circle id="spark-dot" class="spark-dot" cx="0" cy="65" r="3.5" />
-                </svg>
               </div>
               <div class="field">
-                <label for="prefix-input">Command prefix</label>
+                <label for="cs-input">Custom status text</label>
                 <div class="inline-form">
-                  <input id="prefix-input" type="text" placeholder="Command prefix (e.g. g.)" maxlength="8" />
-                  <button id="btn-save-prefix" class="btn-tonal">Save prefix</button>
+                  <input id="cs-input" type="text" placeholder="Leave blank to clear custom status" maxlength="128" />
+                  <button id="btn-cs-apply" class="btn-expressive">Apply</button>
+                </div>
+              </div>
+              <div class="field">
+                <label for="bio-input">Account bio</label>
+                <div class="inline-form">
+                  <input id="bio-input" type="text" placeholder="Up to 190 characters" maxlength="190" />
+                  <button id="btn-bio-apply" class="btn-tonal">Save bio</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>HypeSquad House</label>
+                <div class="sliding-seg" id="hypesquad-seg">
+                  <div class="seg-slider"></div>
+                  <button type="button" class="active" data-house="bravery">Bravery</button>
+                  <button type="button" data-house="brilliance">Brilliance</button>
+                  <button type="button" data-house="balance">Balance</button>
+                  <button type="button" data-house="leave">Leave</button>
                 </div>
               </div>
             </div>
@@ -268,408 +309,482 @@
           <div class="bento-card bento-surface stagger-item">
             <div class="block-head">
               <div>
-                <h2>Console logs</h2>
-                <p class="muted">Recent bot events and commands</p>
+                <h2>Rich presence &amp; rotator</h2>
+                <p class="muted">Custom RPC activity, elapsed timer, or looping status</p>
               </div>
             </div>
-            <div id="log-stream" class="log-stream mono" aria-live="polite"></div>
-          </div>
-        </section>
-
-        <!-- View: Presence Studio -->
-        <section id="view-presence" class="view">
-          <div class="bento-split">
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <div>
-                  <h2>Status &amp; profile</h2>
-                  <p class="muted">Online state, custom status, bio, and HypeSquad</p>
-                </div>
+            <div class="stack-form">
+              <div class="sliding-seg" id="activity-kind-seg">
+                <div class="seg-slider"></div>
+                <button type="button" class="active" data-act-kind="globe">Globe</button>
+                <button type="button" data-act-kind="playing">Play</button>
+                <button type="button" data-act-kind="streaming">Stream</button>
+                <button type="button" data-act-kind="listening">Listen</button>
+                <button type="button" data-act-kind="watching">Watch</button>
               </div>
-              <div class="stack-form">
+              <div class="spoofer-grid two-col">
                 <div class="field">
-                  <label>Online mode</label>
-                  <div class="m3-seg" id="status-mode-seg">
-                    <button type="button" data-status-mode="online"><span class="mode-dot online"></span>Online</button>
-                    <button type="button" data-status-mode="idle"><span class="mode-dot idle"></span>Idle</button>
-                    <button type="button" data-status-mode="dnd"><span class="mode-dot dnd"></span>DND</button>
-                    <button type="button" data-status-mode="invisible"><span class="mode-dot offline"></span>Invisible</button>
-                  </div>
+                  <label for="act-title">Activity name</label>
+                  <input id="act-title" type="text" placeholder="e.g. Valorant / Spotify" maxlength="128" />
                 </div>
                 <div class="field">
-                  <label for="cs-input">Custom status text</label>
-                  <div class="inline-form">
-                    <input id="cs-input" type="text" placeholder="Leave empty to clear custom status" maxlength="128" />
-                    <button id="btn-cs-apply" class="btn-expressive">Apply</button>
-                  </div>
-                </div>
-                <div class="field">
-                  <label for="bio-input">Account bio</label>
-                  <div class="inline-form">
-                    <input id="bio-input" type="text" placeholder="Up to 190 characters" maxlength="190" />
-                    <button id="btn-bio-apply" class="btn-tonal">Save bio</button>
-                  </div>
-                </div>
-                <div class="field">
-                  <label>HypeSquad House</label>
-                  <div class="m3-seg" id="hypesquad-seg">
-                    <button type="button" data-house="bravery">Bravery</button>
-                    <button type="button" data-house="brilliance">Brilliance</button>
-                    <button type="button" data-house="balance">Balance</button>
-                    <button type="button" data-house="leave">Leave</button>
-                  </div>
+                  <label for="act-extra">Elapsed timer or Stream URL</label>
+                  <input id="act-extra" type="text" placeholder="00:16:01 / 2h / https://twitch.tv/..." />
                 </div>
               </div>
-            </div>
-
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <div>
-                  <h2>Rich activity studio</h2>
-                  <p class="muted">Playing, Streaming, Listening, Watching, or Globe RPC</p>
-                </div>
-              </div>
-              <div class="stack-form">
-                <div class="m3-seg" id="activity-kind-seg">
-                  <button type="button" class="active" data-act-kind="globe">Globe RPC</button>
-                  <button type="button" data-act-kind="playing">Playing</button>
-                  <button type="button" data-act-kind="streaming">Streaming</button>
-                  <button type="button" data-act-kind="listening">Listening</button>
-                  <button type="button" data-act-kind="watching">Watching</button>
-                </div>
-                <div class="spoofer-grid two-col">
-                  <div class="field">
-                    <label for="act-title">Activity name</label>
-                    <input id="act-title" type="text" placeholder="e.g. Valorant / Spotify" maxlength="128" />
-                  </div>
-                  <div class="field">
-                    <label for="act-extra">Elapsed timer or Stream URL</label>
-                    <input id="act-extra" type="text" placeholder="00:16:01 / 2h / https://twitch.tv/..." />
-                  </div>
-                </div>
-                <div class="inline-actions">
-                  <button id="btn-act-apply" class="btn-expressive">Broadcast activity</button>
-                  <button id="btn-act-clear" class="btn-danger-tonal">Clear activity</button>
-                </div>
-                <div class="divider"></div>
-                <div class="block-head">
-                  <h3>Status rotator</h3>
-                  <button id="btn-rotate-stop" class="btn-ghost-sm">Stop rotator</button>
-                </div>
-                <div class="field">
-                  <label for="rotate-interval">Slide interval (seconds)</label>
-                  <input id="rotate-interval" type="number" min="5" max="300" value="15" />
-                </div>
-                <div class="field">
-                  <label for="rotate-slides">Slides (one per line)</label>
-                  <textarea id="rotate-slides" rows="3" placeholder="Shipping updates&#10;AFK · Back soon"></textarea>
-                </div>
-                <button id="btn-rotate-start" class="btn-tonal">Start status rotator</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="bento-card bento-surface stagger-item">
-            <div class="block-head">
-              <div>
-                <h2>Game variety badge spoofer</h2>
-                <p class="muted">Cycles playable games to trigger game badges</p>
-              </div>
-              <span id="spoofer-status" class="mono mint-chip">Idle</span>
-            </div>
-            <div class="spoofer-grid">
-              <div class="field">
-                <label for="spoof-count">Games count</label>
-                <input id="spoof-count" type="number" min="1" max="50" value="15" />
-              </div>
-              <div class="field">
-                <label for="spoof-interval">Seconds per game</label>
-                <input id="spoof-interval" type="number" min="3" max="30" value="6" />
-              </div>
-              <div class="spoofer-actions">
-                <button id="btn-spoof-start" class="btn-expressive">Launch spoofer</button>
-                <button id="btn-spoof-stop" class="btn-danger-tonal">Stop</button>
-              </div>
-            </div>
-            <div id="spoofer-bar-wrap" class="wavy-progress-wrap hidden">
-              <div class="wavy-track">
-                <div id="spoofer-bar" class="wavy-fill"></div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- View: Intelligence & OSINT -->
-        <section id="view-intel" class="view">
-          <div class="bento-split">
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <h2>Snipe forensics</h2>
-                <div class="inline-form compact">
-                  <input id="snipe-search" type="search" placeholder="Search content or user" />
-                  <button id="btn-snipe-search" class="btn-tonal">Search</button>
-                </div>
-              </div>
-              <div id="snipes-list" class="data-list"></div>
-            </div>
-
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <h2>Ghost-ping radar</h2>
-                <button id="btn-radar-clear" class="btn-ghost-sm">Clear</button>
-              </div>
-              <div id="radar-list" class="data-list"></div>
-            </div>
-          </div>
-
-          <div class="bento-split">
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <div>
-                  <h2>Vanity URL sniper</h2>
-                  <p class="muted">Poll invite endpoint and optionally claim on drop</p>
-                </div>
-                <span id="vanity-badge" class="mono muted">Standby</span>
-              </div>
-              <div class="stack-form">
-                <div class="spoofer-grid two-col">
-                  <div class="field">
-                    <label for="vanity-code">Invite code</label>
-                    <input id="vanity-code" type="text" placeholder="e.g. globe" />
-                  </div>
-                  <div class="field">
-                    <label for="vanity-guild">Claim Guild ID (optional)</label>
-                    <input id="vanity-guild" type="text" placeholder="Guild ID" class="mono" />
-                  </div>
-                </div>
-                <div class="inline-actions">
-                  <button id="btn-vanity-start" class="btn-expressive">Arm vanity watch</button>
-                  <button id="btn-vanity-stop" class="btn-danger-tonal">Disarm</button>
-                </div>
-              </div>
-            </div>
-
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <div>
-                  <h2>OSINT &amp; net inspector</h2>
-                  <p class="muted">IP geo, DNS records, HTTP headers, crypto, or token check</p>
-                </div>
-              </div>
-              <div class="stack-form">
-                <div class="inline-form">
-                  <select id="osint-kind">
-                    <option value="ip">IP Geo</option>
-                    <option value="dns">DNS Resolve</option>
-                    <option value="headers">HTTP Headers</option>
-                    <option value="crypto">Crypto Ticker</option>
-                    <option value="token">Token Check</option>
-                  </select>
-                  <input id="osint-target" type="text" placeholder="1.1.1.1 / example.com / sol" />
-                  <button id="btn-osint-run" class="btn-expressive">Inspect</button>
-                </div>
-                <pre id="osint-output" class="osint-pre mono">Ready for lookup.</pre>
-              </div>
-            </div>
-          </div>
-
-          <div class="bento-split">
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <h2>Keyword sniper &amp; alert hook</h2>
-              </div>
-              <div class="stack-form">
-                <div class="inline-form">
-                  <input id="kw-input" type="text" placeholder="Add watched keyword" />
-                  <button id="btn-kw-add" class="btn-expressive">Add</button>
-                </div>
-                <div id="kw-list" class="token-list"></div>
-                <div class="inline-form">
-                  <input id="webhook-input" type="url" placeholder="Private alert webhook URL (https://...)" />
-                  <button id="btn-webhook-save" class="btn-tonal">Save hook</button>
-                </div>
-              </div>
-            </div>
-
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <h2>User stalker &amp; lookup</h2>
-              </div>
-              <div class="stack-form">
-                <div class="inline-form">
-                  <input id="stalk-uid" type="text" placeholder="Discord User ID" class="mono" />
-                  <button id="btn-stalk-add" class="btn-tonal">Stalk</button>
-                  <button id="btn-profile-user" class="btn-expressive">Profile</button>
-                </div>
-                <div id="profile-output" class="data-list"></div>
-                <div id="stalk-logs" class="data-list"></div>
-              </div>
-            </div>
-          </div>
-
-          <div class="bento-card bento-surface stagger-item">
-            <div class="block-head">
-              <h2>Unfriend &amp; relationship diff</h2>
               <div class="inline-actions">
-                <button id="btn-friends-backup" class="btn-tonal">Save snapshot</button>
-                <button id="btn-friends-diff" class="btn-expressive">Check diff</button>
+                <button id="btn-act-apply" class="btn-expressive">Set activity</button>
+                <button id="btn-act-clear" class="btn-danger-tonal">Clear</button>
               </div>
+              <div class="divider"></div>
+              <div class="block-head">
+                <h3>Status rotator</h3>
+                <button id="btn-rotate-stop" class="btn-ghost-sm">Stop rotator</button>
+              </div>
+              <div class="field">
+                <label for="rotate-interval">Interval (seconds)</label>
+                <input id="rotate-interval" type="number" min="5" max="300" value="15" />
+              </div>
+              <div class="field">
+                <label for="rotate-slides">Slides (one per line)</label>
+                <textarea id="rotate-slides" rows="3" placeholder="Online&#10;BRB in 5m"></textarea>
+              </div>
+              <button id="btn-rotate-start" class="btn-tonal">Start rotator</button>
             </div>
-            <div id="friends-diff-out" class="data-list"></div>
           </div>
-        </section>
+        </div>
 
-        <!-- View: Servers & Voice -->
-        <section id="view-servers" class="view">
-          <div class="bento-split">
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <h2>Voice control deck</h2>
-                <button id="btn-vc-leave" class="btn-danger-tonal">Disconnect</button>
-              </div>
-              <div class="stack-form">
-                <div class="inline-form">
-                  <input id="vc-channel-id" type="text" placeholder="Voice Channel ID" class="mono" />
-                  <select id="vc-mode">
-                    <option value="deaf">Mute + Deaf</option>
-                    <option value="mute">Mute only</option>
-                    <option value="open">Open mic</option>
-                  </select>
-                  <button id="btn-vc-join" class="btn-expressive">Join 24/7</button>
-                </div>
-                <div class="inline-form">
-                  <input id="vc-follow-uid" type="text" placeholder="Target User ID to follow (or off)" class="mono" />
-                  <button id="btn-vc-follow" class="btn-tonal">Set follow</button>
-                </div>
+        <div class="bento-card bento-surface stagger-item">
+          <div class="block-head">
+            <div>
+              <h2>Game badge spoofer</h2>
+              <p class="muted">Cycles verified game sessions for profile badges</p>
+            </div>
+            <span id="spoofer-status" class="mono volt-chip">Idle</span>
+          </div>
+          <div class="spoofer-grid">
+            <div class="field">
+              <label for="spoof-count">Games count</label>
+              <input id="spoof-count" type="number" min="1" max="50" value="15" />
+            </div>
+            <div class="field">
+              <label for="spoof-interval">Seconds per game</label>
+              <input id="spoof-interval" type="number" min="3" max="30" value="6" />
+            </div>
+            <div class="spoofer-actions">
+              <button id="btn-spoof-start" class="btn-expressive">Start spoofer</button>
+              <button id="btn-spoof-stop" class="btn-danger-tonal">Stop</button>
+            </div>
+          </div>
+          <div id="spoofer-bar-wrap" class="wavy-progress-wrap hidden">
+            <div class="wavy-track">
+              <div id="spoofer-bar" class="wavy-fill"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- View: Intel & Tools -->
+      <section id="view-intel" class="view">
+        <div class="bento-split">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <h2>Snipe history</h2>
+              <div class="inline-form compact">
+                <input id="snipe-search" type="search" placeholder="Search content or user" />
+                <button id="btn-snipe-search" class="btn-tonal">Search</button>
               </div>
             </div>
-
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <h2>Server security audit</h2>
-                <span class="muted" id="audit-title">Select a guild below</span>
-              </div>
-              <div id="audit-output" class="data-list"></div>
-            </div>
+            <div id="snipes-list" class="data-list"></div>
           </div>
 
           <div class="bento-card bento-surface stagger-item">
             <div class="block-head">
-              <h2>Mutual servers</h2>
-              <button id="btn-refresh-guilds" class="btn-ghost-sm">Refresh</button>
+              <h2>Ghost-ping radar</h2>
+              <button id="btn-radar-clear" class="btn-ghost-sm">Clear</button>
             </div>
-            <div id="guilds-list" class="data-list"></div>
+            <div id="radar-list" class="data-list"></div>
           </div>
-        </section>
+        </div>
 
-        <!-- View: DMs & Dispatch -->
-        <section id="view-dms" class="view">
+        <div class="bento-split">
           <div class="bento-card bento-surface stagger-item">
             <div class="block-head">
               <div>
-                <h2>Live message dispatch</h2>
-                <p class="muted">Send a message directly to any DM or server text channel</p>
+                <h2>OSINT &amp; net lookup</h2>
+                <p class="muted">IP geo, DNS, headers, crypto price, or token check</p>
               </div>
             </div>
-            <div class="spoofer-grid">
-              <div class="field">
-                <label for="dispatch-channel">Target channel / DM ID</label>
-                <input id="dispatch-channel" type="text" placeholder="Channel ID (click Dispatch on any DM below)" class="mono" />
+            <div class="stack-form">
+              <div class="inline-form">
+                <select id="osint-kind">
+                  <option value="ip">IP Geo</option>
+                  <option value="dns">DNS Resolve</option>
+                  <option value="headers">HTTP Headers</option>
+                  <option value="crypto">Crypto Price</option>
+                  <option value="token">Token Check</option>
+                </select>
+                <input id="osint-target" type="text" placeholder="1.1.1.1 / example.com / sol" />
+                <button id="btn-osint-run" class="btn-expressive">Run</button>
               </div>
-              <div class="field">
-                <label for="dispatch-content">Message content</label>
-                <input id="dispatch-content" type="text" placeholder="Type message to send as your account..." maxlength="2000" />
+              <pre id="osint-output" class="osint-pre mono">Ready.</pre>
+            </div>
+          </div>
+
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Encoder / decoder lab</h2>
+                <p class="muted">Base64, Hex, Binary, Morse, and SHA-256</p>
               </div>
-              <div class="spoofer-actions">
-                <button id="btn-dispatch-send" class="btn-expressive">Send message</button>
+            </div>
+            <div class="stack-form">
+              <div class="inline-form">
+                <select id="enc-mode">
+                  <option value="b64_enc">Base64 Encode</option>
+                  <option value="b64_dec">Base64 Decode</option>
+                  <option value="hex_enc">Hex Encode</option>
+                  <option value="hex_dec">Hex Decode</option>
+                  <option value="bin_enc">Binary Encode</option>
+                  <option value="bin_dec">Binary Decode</option>
+                  <option value="morse_enc">Morse Encode</option>
+                  <option value="morse_dec">Morse Decode</option>
+                  <option value="sha256">SHA-256 Hash</option>
+                </select>
+                <input id="enc-input" type="text" placeholder="Text to convert..." />
+                <button id="btn-enc-run" class="btn-tonal">Convert</button>
+              </div>
+              <pre id="enc-output" class="osint-pre mono">Result appears here.</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="bento-split">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Vanity sniper</h2>
+                <p class="muted">Watch an invite code and auto-claim if it drops</p>
+              </div>
+              <span id="vanity-badge" class="mono muted">Standby</span>
+            </div>
+            <div class="stack-form">
+              <div class="spoofer-grid two-col">
+                <div class="field">
+                  <label for="vanity-code">Invite code</label>
+                  <input id="vanity-code" type="text" placeholder="e.g. globe" />
+                </div>
+                <div class="field">
+                  <label for="vanity-guild">Claim Guild ID (optional)</label>
+                  <input id="vanity-guild" type="text" placeholder="Guild ID" class="mono" />
+                </div>
+              </div>
+              <div class="inline-actions">
+                <button id="btn-vanity-start" class="btn-expressive">Watch vanity</button>
+                <button id="btn-vanity-stop" class="btn-danger-tonal">Stop</button>
               </div>
             </div>
           </div>
 
-          <div class="bento-split">
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <h2>Open direct messages</h2>
-                <div class="inline-actions">
-                  <button id="btn-accept-friends" class="btn-tonal">Accept requests</button>
-                  <button id="btn-clear-outgoing" class="btn-ghost-sm">Clear outgoing</button>
-                </div>
-              </div>
-              <div id="dms-list" class="data-list"></div>
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <h2>Keyword alerts &amp; stalker</h2>
             </div>
-
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <h2>Saved bookmarks</h2>
-                <div class="inline-form compact">
-                  <input id="bm-filter" type="search" placeholder="Filter tag" />
-                  <button id="btn-bm-filter" class="btn-tonal">Filter</button>
-                </div>
+            <div class="stack-form">
+              <div class="inline-form">
+                <input id="kw-input" type="text" placeholder="Add keyword alert" />
+                <button id="btn-kw-add" class="btn-expressive">Add</button>
               </div>
-              <div id="bookmarks-list" class="data-list"></div>
-            </div>
-          </div>
-        </section>
-
-        <!-- View: System & Schedules -->
-        <section id="view-system" class="view">
-          <div class="bento-split">
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <h2>Process &amp; updates</h2>
+              <div id="kw-list" class="token-list"></div>
+              <div class="inline-form">
+                <input id="webhook-input" type="url" placeholder="Alert webhook URL (https://...)" />
+                <button id="btn-webhook-save" class="btn-tonal">Save hook</button>
               </div>
-              <div class="stack-form">
-                <div class="inline-actions">
-                  <button id="btn-sys-update" class="btn-expressive">Pull Git &amp; Hot-Reload</button>
-                  <button id="btn-sys-restart" class="btn-danger-tonal">Process Restart</button>
-                </div>
-                <div class="inline-form">
-                  <select id="reload-mod">
-                    <option value="utility">utility</option>
-                    <option value="tools">tools</option>
-                    <option value="moderation">moderation</option>
-                    <option value="status">status</option>
-                    <option value="voice">voice</option>
-                    <option value="troll">troll</option>
-                    <option value="fun">fun</option>
-                  </select>
-                  <button id="btn-sys-reload" class="btn-tonal">Reload cog</button>
-                </div>
-                <div class="divider"></div>
-                <div>
-                  <h3>Web session security</h3>
-                  <p class="muted">Rotate the HMAC-SHA256 signing secret to revoke every active browser.</p>
-                  <button id="btn-revoke-all" class="btn-danger-tonal">Revoke all sessions</button>
-                </div>
+              <div class="divider"></div>
+              <div class="inline-form">
+                <input id="stalk-uid" type="text" placeholder="Discord User ID" class="mono" />
+                <button id="btn-stalk-add" class="btn-tonal">Track</button>
+                <button id="btn-profile-user" class="btn-expressive">Lookup</button>
               </div>
-            </div>
-
-            <div class="bento-card bento-surface stagger-item">
-              <div class="block-head">
-                <h2>Active recurring schedules</h2>
-                <button id="btn-refresh-sched" class="btn-ghost-sm">Refresh</button>
-              </div>
-              <div id="schedules-list" class="data-list"></div>
+              <div id="profile-output" class="data-list"></div>
+              <div id="stalk-logs" class="data-list"></div>
             </div>
           </div>
-        </section>
-      </main>
-    </div>
+        </div>
 
-    <!-- Mobile M3 Bottom Navigation Rail -->
-    <nav class="mobile-rail" aria-label="Quick mobile navigation">
-      <button class="rail-btn active" data-view="overview">Home</button>
-      <button class="rail-btn" data-view="presence">Presence</button>
-      <button class="rail-btn" data-view="intel">Intel</button>
-      <button class="rail-btn" data-view="servers">Servers</button>
-      <button class="rail-btn" data-view="dms">DMs</button>
+        <div class="bento-card bento-surface stagger-item">
+          <div class="block-head">
+            <h2>Friend list changes</h2>
+            <div class="inline-actions">
+              <button id="btn-friends-backup" class="btn-tonal">Save snapshot</button>
+              <button id="btn-friends-diff" class="btn-expressive">Check diff</button>
+            </div>
+          </div>
+          <div id="friends-diff-out" class="data-list"></div>
+        </div>
+      </section>
+
+      <!-- View: Servers & Voice -->
+      <section id="view-servers" class="view">
+        <div class="bento-split">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <h2>Voice deck</h2>
+              <button id="btn-vc-leave" class="btn-danger-tonal">Disconnect</button>
+            </div>
+            <div class="stack-form">
+              <div class="inline-form">
+                <input id="vc-channel-id" type="text" placeholder="Voice Channel ID" class="mono" />
+                <select id="vc-mode">
+                  <option value="deaf">Mute + Deaf</option>
+                  <option value="mute">Mute only</option>
+                  <option value="open">Open mic</option>
+                </select>
+                <button id="btn-vc-join" class="btn-expressive">Join 24/7</button>
+              </div>
+              <div class="inline-form">
+                <input id="vc-follow-uid" type="text" placeholder="User ID to follow (or off)" class="mono" />
+                <button id="btn-vc-follow" class="btn-tonal">Set follow</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <div>
+                <h2>Channel cleanup &amp; top chatters</h2>
+                <p class="muted">Run slowmode, cleanups, or chat rankings on a channel</p>
+              </div>
+            </div>
+            <div class="stack-form">
+              <div class="inline-form">
+                <input id="mod-ch-id" type="text" placeholder="Text Channel ID" class="mono" />
+                <select id="mod-action">
+                  <option value="topchatters">Top Chatters</option>
+                  <option value="purgelinks">Purge Links</option>
+                  <option value="purgebots">Purge Bots</option>
+                  <option value="slowmode">Set Slowmode (5s)</option>
+                </select>
+                <button id="btn-mod-run" class="btn-expressive">Run</button>
+              </div>
+              <div id="mod-output" class="data-list"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bento-split">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <h2>Mimic &amp; auto-react targets</h2>
+            </div>
+            <div class="stack-form">
+              <div class="spoofer-grid two-col">
+                <div class="field">
+                  <label for="mimic-cid">Channel ID</label>
+                  <input id="mimic-cid" type="text" placeholder="Channel ID" class="mono" />
+                </div>
+                <div class="field">
+                  <label for="mimic-uid">User ID (empty clears)</label>
+                  <input id="mimic-uid" type="text" placeholder="Target User ID" class="mono" />
+                </div>
+              </div>
+              <button id="btn-mimic-set" class="btn-tonal">Save mimic rule</button>
+              <div class="divider"></div>
+              <div class="spoofer-grid two-col">
+                <div class="field">
+                  <label for="treact-uid">User ID</label>
+                  <input id="treact-uid" type="text" placeholder="Target User ID" class="mono" />
+                </div>
+                <div class="field">
+                  <label for="treact-emoji">Emoji (empty clears)</label>
+                  <input id="treact-emoji" type="text" placeholder="💀 or 🔥" />
+                </div>
+              </div>
+              <button id="btn-treact-set" class="btn-tonal">Save user reaction</button>
+            </div>
+          </div>
+
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <h2>Permission audit</h2>
+              <span class="muted" id="audit-title">Pick a server below</span>
+            </div>
+            <div id="audit-output" class="data-list"></div>
+          </div>
+        </div>
+
+        <div class="bento-card bento-surface stagger-item">
+          <div class="block-head">
+            <h2>Your servers</h2>
+            <button id="btn-refresh-guilds" class="btn-ghost-sm">Refresh</button>
+          </div>
+          <div id="guilds-list" class="data-list"></div>
+        </div>
+      </section>
+
+      <!-- View: DMs & Rules -->
+      <section id="view-dms" class="view">
+        <div class="bento-card bento-surface stagger-item">
+          <div class="block-head">
+            <div>
+              <h2>Send message</h2>
+              <p class="muted">Dispatch directly to any DM or server channel</p>
+            </div>
+          </div>
+          <div class="spoofer-grid">
+            <div class="field">
+              <label for="dispatch-channel">Channel or DM ID</label>
+              <input id="dispatch-channel" type="text" placeholder="Channel ID (click Use on any DM below)" class="mono" />
+            </div>
+            <div class="field">
+              <label for="dispatch-content">Message</label>
+              <input id="dispatch-content" type="text" placeholder="Type message..." maxlength="2000" />
+            </div>
+            <div class="spoofer-actions">
+              <button id="btn-dispatch-send" class="btn-expressive">Send</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="bento-card bento-surface stagger-item">
+          <div class="block-head">
+            <div>
+              <h2>Channel auto-reply &amp; auto-react</h2>
+              <p class="muted">Trigger automated replies or reactions per channel</p>
+            </div>
+          </div>
+          <div class="spoofer-grid two-col">
+            <div class="field">
+              <label for="ar-ch-id">Channel ID</label>
+              <input id="ar-ch-id" type="text" placeholder="Channel ID" class="mono" />
+            </div>
+            <div class="field">
+              <label for="ar-emojis">Auto-react emojis (space separated)</label>
+              <div class="inline-form">
+                <input id="ar-emojis" type="text" placeholder="🔥 ✅" />
+                <button id="btn-ar-react" class="btn-tonal">Save</button>
+              </div>
+            </div>
+          </div>
+          <div class="spoofer-grid">
+            <div class="field">
+              <label for="ar-trigger">Trigger word or /regex/</label>
+              <input id="ar-trigger" type="text" placeholder="hello or /ping/i" />
+            </div>
+            <div class="field">
+              <label for="ar-response">Auto-reply text</label>
+              <input id="ar-response" type="text" placeholder="Reply message..." />
+            </div>
+            <div class="spoofer-actions">
+              <button id="btn-ar-add" class="btn-expressive">Add rule</button>
+            </div>
+          </div>
+          <div id="ar-rules-list" class="data-list"></div>
+        </div>
+
+        <div class="bento-split">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <h2>Direct messages</h2>
+              <div class="inline-actions">
+                <button id="btn-accept-friends" class="btn-tonal">Accept requests</button>
+                <button id="btn-clear-outgoing" class="btn-ghost-sm">Clear sent</button>
+              </div>
+            </div>
+            <div id="dms-list" class="data-list"></div>
+          </div>
+
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <h2>Saved bookmarks</h2>
+              <div class="inline-form compact">
+                <input id="bm-filter" type="search" placeholder="Filter tag" />
+                <button id="btn-bm-filter" class="btn-tonal">Filter</button>
+              </div>
+            </div>
+            <div id="bookmarks-list" class="data-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- View: System -->
+      <section id="view-system" class="view">
+        <div class="bento-split">
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <h2>Bot process &amp; updates</h2>
+            </div>
+            <div class="stack-form">
+              <div class="inline-actions">
+                <button id="btn-sys-update" class="btn-expressive">Pull Git &amp; Reload</button>
+                <button id="btn-sys-restart" class="btn-danger-tonal">Restart Bot</button>
+              </div>
+              <div class="inline-form">
+                <select id="reload-mod">
+                  <option value="utility">utility</option>
+                  <option value="tools">tools</option>
+                  <option value="moderation">moderation</option>
+                  <option value="status">status</option>
+                  <option value="voice">voice</option>
+                  <option value="troll">troll</option>
+                  <option value="fun">fun</option>
+                </select>
+                <button id="btn-sys-reload" class="btn-tonal">Reload cog</button>
+              </div>
+              <div class="divider"></div>
+              <div>
+                <h3>Browser sessions</h3>
+                <p class="muted">Rotate the HMAC secret to sign out all browsers immediately.</p>
+                <button id="btn-revoke-all" class="btn-danger-tonal">Sign out all sessions</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="bento-card bento-surface stagger-item">
+            <div class="block-head">
+              <h2>Recurring schedules</h2>
+              <button id="btn-refresh-sched" class="btn-ghost-sm">Refresh</button>
+            </div>
+            <div id="schedules-list" class="data-list"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Single Unified Floating Liquid Glass Bottom Dock (Desktop & Mobile) -->
+    <nav id="liquid-dock" class="liquid-dock" aria-label="Primary navigation">
+      <div id="dock-indicator" class="dock-indicator" aria-hidden="true"></div>
+      <button class="dock-item active" data-view="overview" title="Overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg>
+        <span>Home</span>
+      </button>
+      <button class="dock-item" data-view="presence" title="Presence">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+        <span>Presence</span>
+      </button>
+      <button class="dock-item" data-view="intel" title="Intel & Tools">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span>Intel</span>
+      </button>
+      <button class="dock-item" data-view="servers" title="Servers & Voice">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
+        <span>Servers</span>
+      </button>
+      <button class="dock-item" data-view="dms" title="DMs & Rules">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>DMs</span>
+      </button>
+      <button class="dock-item" data-view="system" title="System">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>System</span>
+      </button>
     </nav>
   </div>
 
   <!-- Cmd+K Command Palette -->
   <dialog id="cmdk-dialog" class="cmdk-dialog">
     <div class="cmdk-box">
-      <input id="cmdk-input" type="search" placeholder="Jump to workspace, status mode, or runtime action..." autocomplete="off" />
+      <input id="cmdk-input" type="search" placeholder="Jump to tab, status mode, or action..." autocomplete="off" />
       <div id="cmdk-results" class="cmdk-results"></div>
     </div>
   </dialog>

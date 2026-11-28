@@ -1007,6 +1007,161 @@ def register_routes(
             return _json({"ok": True, "restarting": True})
         return _json({"error": "Unknown system action"}, status=400)
 
+    # ── Analytics, Channel Automation, Encoder, Cleanup & Troll ──────────────
+
+    async def get_analytics(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        from data.tracker import tracker
+        uid = bot.user.id if getattr(bot, "user", None) else 0
+        hourly = tracker.get_hourly_activity(uid, hours=24) if uid else []
+        stats = tracker.get_stats(uid, None) if uid else {}
+        return _json({"hourly": hourly, "stats": stats})
+
+    async def automation_handler(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        tools = bot.get_cog("Tools")
+        if not tools:
+            return _json({"error": "Tools module missing"}, status=503)
+        if request.method == "POST":
+            auth.authenticate_request(request, require_csrf=True)
+            data = await _body(request)
+            kind = str(data.get("kind", "autoreply"))
+            cid = int(str(data.get("channel_id", "0") or "0"))
+            if not cid:
+                return _json({"error": "Valid channel ID required"}, status=400)
+            if kind == "autoreact":
+                emojis = [str(e).strip() for e in (data.get("emojis") or []) if str(e).strip()]
+                if emojis:
+                    tools._auto_react[cid] = emojis
+                else:
+                    tools._auto_react.pop(cid, None)
+            elif kind == "autoreply":
+                from modules.tools import AutoReplyRule
+                trig = str(data.get("trigger", "")).strip()
+                resp_txt = str(data.get("response", "")).strip()
+                if not trig or not resp_txt:
+                    return _json({"error": "Trigger and response required"}, status=400)
+                is_re = trig.startswith("/") and trig.endswith("/") and len(trig) > 2
+                clean = trig[1:-1] if is_re else trig
+                tools._auto_reply.setdefault(cid, []).append(AutoReplyRule(trigger=clean, response=resp_txt, is_regex=is_re))
+        elif request.method == "DELETE":
+            auth.authenticate_request(request, require_csrf=True)
+            data = await _body(request)
+            kind = str(data.get("kind", "autoreply"))
+            cid = int(str(data.get("channel_id", "0") or "0"))
+            if kind == "autoreact":
+                tools._auto_react.pop(cid, None)
+            else:
+                tools._auto_reply.pop(cid, None)
+
+        reacts = [{"channel_id": str(k), "emojis": v} for k, v in tools._auto_react.items()]
+        replies = [
+            {
+                "channel_id": str(k),
+                "rules": [{"trigger": r.trigger, "response": r.response, "is_regex": r.is_regex} for r in rules],
+            }
+            for k, rules in tools._auto_reply.items()
+        ]
+        return _json({"autoreact": reacts, "autoreply": replies})
+
+    async def encode_tool(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        import base64
+        import hashlib
+        from modules.tools import MORSE_MAP, REVERSE_MORSE_MAP
+        data = await _body(request)
+        mode = str(data.get("mode", "b64_enc"))
+        text = str(data.get("text", ""))
+        if not text:
+            return _json({"error": "Input text required"}, status=400)
+        try:
+            if mode == "b64_enc":
+                out = base64.b64encode(text.encode()).decode()
+            elif mode == "b64_dec":
+                out = base64.b64decode(text.encode()).decode("utf-8", errors="replace")
+            elif mode == "hex_enc":
+                out = text.encode().hex(" ")
+            elif mode == "hex_dec":
+                out = bytes.fromhex(text.replace(" ", "")).decode("utf-8", errors="replace")
+            elif mode == "bin_enc":
+                out = " ".join(f"{b:08b}" for b in text.encode())
+            elif mode == "bin_dec":
+                bits = text.split()
+                out = bytes(int(b, 2) for b in bits).decode("utf-8", errors="replace")
+            elif mode == "morse_enc":
+                out = " ".join(MORSE_MAP.get(c.upper(), "?") for c in text)
+            elif mode == "morse_dec":
+                out = "".join(REVERSE_MORSE_MAP.get(tok, " ") if tok != "/" else " " for tok in text.split())
+            elif mode == "sha256":
+                out = hashlib.sha256(text.encode()).hexdigest()
+            else:
+                return _json({"error": "Unknown encoder mode"}, status=400)
+            return _json({"ok": True, "output": out})
+        except Exception as exc:
+            return _json({"error": str(exc)}, status=400)
+
+    async def guild_cleanup(request: web.Request) -> web.Response:
+        auth.authenticate_request(request, require_csrf=True)
+        data = await _body(request)
+        cid = int(str(data.get("channel_id", "0") or "0"))
+        action = str(data.get("action", "topchatters"))
+        ch = bot.get_channel(cid)
+        if not ch:
+            return _json({"error": "Channel not found"}, status=404)
+        if action == "slowmode":
+            secs = max(0, min(int(data.get("seconds", 0)), 21600))
+            await ch.edit(slowmode_delay=secs)
+            return _json({"ok": True, "detail": f"Slowmode set to {secs}s in #{ch.name}"})
+        if action in ("purgelinks", "purgebots"):
+            limit = max(1, min(int(data.get("limit", 100)), 250))
+            deleted = 0
+            async for m in ch.history(limit=limit):
+                hit = (m.author.bot if action == "purgebots" else ("http://" in m.content or "https://" in m.content or "discord.gg/" in m.content))
+                if hit:
+                    try:
+                        await m.delete()
+                        deleted += 1
+                        await asyncio.sleep(0.35)
+                    except Exception:
+                        pass
+            return _json({"ok": True, "detail": f"Removed {deleted} messages in #{ch.name}"})
+        if action == "topchatters":
+            counts: dict[str, int] = {}
+            async for m in ch.history(limit=200):
+                if not m.author.bot:
+                    counts[str(m.author)] = counts.get(str(m.author), 0) + 1
+            ranked = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:8]
+            return _json({"ok": True, "top": [{"user": u, "count": c} for u, c in ranked]})
+        return _json({"error": "Unknown cleanup action"}, status=400)
+
+    async def troll_handler(request: web.Request) -> web.Response:
+        auth.authenticate_request(request)
+        troll = bot.get_cog("Troll")
+        if not troll:
+            return _json({"error": "Troll module missing"}, status=503)
+        if request.method == "POST":
+            auth.authenticate_request(request, require_csrf=True)
+            data = await _body(request)
+            act = str(data.get("action", ""))
+            if act == "mimic":
+                cid = int(str(data.get("channel_id", "0") or "0"))
+                uid = int(str(data.get("user_id", "0") or "0"))
+                if cid and uid:
+                    troll._mimic_targets[cid] = uid
+                elif cid:
+                    troll._mimic_targets.pop(cid, None)
+            elif act == "react":
+                uid = int(str(data.get("user_id", "0") or "0"))
+                emoji = str(data.get("emoji", "")).strip()
+                if uid and emoji:
+                    troll._react_targets[uid] = emoji
+                elif uid:
+                    troll._react_targets.pop(uid, None)
+        return _json({
+            "mimic": [{"channel_id": str(c), "user_id": str(u)} for c, u in troll._mimic_targets.items()],
+            "react": [{"user_id": str(u), "emoji": e} for u, e in troll._react_targets.items()],
+        })
+
     # Register Routes
     r = app.router
     r.add_get("/api/v1/auth/me", auth_me)
@@ -1015,6 +1170,7 @@ def register_routes(
     r.add_post("/api/v1/auth/revoke", auth_revoke)
 
     r.add_get("/api/v1/overview", get_overview)
+    r.add_get("/api/v1/analytics", get_analytics)
     r.add_post("/api/v1/toggles", update_toggles)
 
     r.add_post("/api/v1/presence/custom", set_custom_status)
@@ -1037,11 +1193,18 @@ def register_routes(
     r.add_post("/api/v1/intel/vanity", vanity_handler)
     r.add_delete("/api/v1/intel/vanity", vanity_handler)
     r.add_post("/api/v1/tools/inspect", inspect_tool)
+    r.add_post("/api/v1/tools/encode", encode_tool)
+    r.add_get("/api/v1/tools/automation", automation_handler)
+    r.add_post("/api/v1/tools/automation", automation_handler)
+    r.add_delete("/api/v1/tools/automation", automation_handler)
+    r.add_get("/api/v1/troll/control", troll_handler)
+    r.add_post("/api/v1/troll/control", troll_handler)
     r.add_get("/api/v1/intel/friends/diff", friends_action)
     r.add_post("/api/v1/intel/friends", friends_action)
     r.add_post("/api/v1/intel/user-profile", profile_user)
 
     r.add_get("/api/v1/guilds", list_guilds)
+    r.add_post("/api/v1/guilds/cleanup", guild_cleanup)
     r.add_post("/api/v1/dispatch/send", dispatch_send)
     r.add_get("/api/v1/guilds/{id}/audit", audit_guild)
     r.add_get("/api/v1/guilds/{id}/backup", backup_guild_download)

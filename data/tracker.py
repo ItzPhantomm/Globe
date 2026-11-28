@@ -185,6 +185,32 @@ class MessageTracker:
             "dms_today": dms_today,
         }
 
+    def get_hourly_activity(self, author_id: int, hours: int = 24) -> list[dict[str, object]]:
+        """Return hourly message counts for the last N hours from SQLite."""
+        self.flush()
+        now = time.time()
+        cutoff = now - hours * 3600
+        buckets = [0] * hours
+        try:
+            conn = self._get_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT timestamp FROM messages WHERE author_id = ? AND timestamp >= ?",
+                (author_id, cutoff),
+            )
+            for (ts,) in cur.fetchall():
+                idx = int((ts - cutoff) // 3600)
+                if 0 <= idx < hours:
+                    buckets[idx] += 1
+        except Exception:
+            pass
+        out: list[dict[str, object]] = []
+        for i in range(hours):
+            slot_ts = cutoff + (i + 1) * 3600
+            lbl = datetime.fromtimestamp(slot_ts).strftime("%H:00")
+            out.append({"label": lbl, "count": buckets[i]})
+        return out
+
     def record_snipe(
         self,
         channel_id: int,
