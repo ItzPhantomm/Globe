@@ -67,16 +67,44 @@ def print_startup_table(token_preview: str, prefix: str, owner_id: int, module_c
     console.print(Panel(table, title="[globe.brand]Globe[/]", border_style="bright_cyan"))
 
 
+# ── Live WebSocket Log Hook ───────────────────────────────────────────────────
+_LOG_LISTENERS: list = []
+
+
+def register_log_listener(cb) -> None:
+    if cb not in _LOG_LISTENERS:
+        _LOG_LISTENERS.append(cb)
+
+
+def unregister_log_listener(cb) -> None:
+    if cb in _LOG_LISTENERS:
+        _LOG_LISTENERS.remove(cb)
+
+
+def _emit_log(level: str, message: str) -> None:
+    if not _LOG_LISTENERS:
+        return
+    ts = _ts()
+    for cb in list(_LOG_LISTENERS):
+        try:
+            cb({"ts": ts, "level": level, "message": message})
+        except Exception:
+            pass
+
+
 def log_info(msg: str) -> None:
     console.print(f"[globe.ts]{_ts()}[/] [globe.ok]INFO[/]  {msg}")
+    _emit_log("INFO", msg)
 
 
 def log_warn(msg: str) -> None:
     console.print(f"[globe.ts]{_ts()}[/] [globe.warn]WARN[/]  {msg}")
+    _emit_log("WARN", msg)
 
 
 def log_err(msg: str) -> None:
     console.print(f"[globe.ts]{_ts()}[/] [globe.err] ERR[/]  {msg}")
+    _emit_log("ERR", msg)
 
 
 def log_cmd(ctx_name: str, cmd: str, args: str = "") -> None:
@@ -85,8 +113,10 @@ def log_cmd(ctx_name: str, cmd: str, args: str = "") -> None:
         f"[globe.ts]{_ts()}[/] [globe.accent] CMD[/]  "
         f"[globe.cmd]{ctx_name}[/] → [globe.brand]{cmd}[/]{args_part}"
     )
+    _emit_log("CMD", f"{ctx_name} -> {cmd} {args}".strip())
 
 
 def log_event(event: str, detail: str = "") -> None:
     detail_part = f" [globe.muted]· {detail}[/]" if detail else ""
     console.print(f"[globe.ts]{_ts()}[/] [bright_blue]  EV[/]  {event}{detail_part}")
+    _emit_log("EV", f"{event} {detail}".strip())

@@ -122,6 +122,16 @@ async def _run(token: str) -> None:
     from core.bot import GlobeBot
 
     bot = GlobeBot()
+    dashboard = None
+
+    if settings.dashboard_enabled:
+        try:
+            from web.server import DashboardServer
+            dashboard = DashboardServer(bot=bot, token_provider=lambda: token)
+            await dashboard.start()
+        except Exception as exc:
+            log_warn(f"Web Control Plane failed to start: {exc}")
+            dashboard = None
 
     try:
         await bot.start(token, reconnect=True)
@@ -129,6 +139,8 @@ async def _run(token: str) -> None:
         log_err(f"Fatal: {exc}")
         sys.exit(1)
     finally:
+        if dashboard is not None:
+            await dashboard.stop()
         if not bot.is_closed():
             await bot.close()
 
